@@ -1,0 +1,12 @@
+body { padding-bottom: 64px; }
+#persistent-feedback {
+  position: fixed; left: 50%; bottom: max(12px, env(safe-area-inset-bottom));
+  transform: translateX(-50%); z-index: 90;
+  border: 1px solid var(--rule, #c9c4b8); border-radius: 999px;
+  padding: 10px 20px; min-height: 44px;
+  background: var(--paper, #fffdf7); color: var(--ink, #252822);
+  font: inherit; font-size: 14px; cursor: pointer;
+  box-shadow: 0 2px 12px #0002;
+}
+#persistent-feedback:focus-visible { outline: 3px solid #587c58; outline-offset: 3px; }
+@media print { #persistent-feedback { display: none; } }
