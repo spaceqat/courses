@@ -4,9 +4,16 @@
   const updateLabel = () => {
     const label = typeof LANG !== 'undefined' && LANG === 'en' ? 'Feedback' : '提交反馈';
     if (button.textContent !== label) button.textContent = label;
-    const language = document.querySelector('[data-lang-switch]');
-    if (language && language.previousElementSibling !== button) {
-      language.before(button);
+    const language = document.querySelector('.site-header [data-lang-switch]');
+    if (language) {
+      let group = language.closest('.feedback-language-actions');
+      if (!group) {
+        group = document.createElement('div');
+        group.className = 'feedback-language-actions';
+        language.before(group);
+        group.append(language);
+      }
+      if (language.previousElementSibling !== button) group.insertBefore(button, language);
     }
     button.hidden = !language;
   };
