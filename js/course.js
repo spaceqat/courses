@@ -1,8 +1,8 @@
 
 /* js/i18n.js */
 /* Language switch for the bilingual course. Chinese is the source; English is layered on top.
-   Choose with ?lang=en / ?lang=zh (remembered) or the header button. Switching reloads the page;
-   progress and bookmarks are shared between the two languages.
+   Choose with ?lang=en / ?lang=zh (remembered) or the header button. Switching reloads the page and
+   returns to the same lesson page; progress and bookmarks are shared between the two languages.
    Until the learner picks one, the course follows the browser: the first of its preferred languages
    that is Chinese or English decides; a browser that lists neither gets English. */
 function browserLanguage(){
@@ -32,6 +32,21 @@ if(typeof document!=='undefined'){
 function setCourseLanguage(next){
  if(next===LANG)return;
  try{localStorage.setItem('spq.lang',next)}catch(e){}
+ // Come back to the same place after the reload: the lesson page, or the chapter title page.
+ try{
+  const scroll=Math.round(window.scrollY||0),feedback=document.querySelector('#course-feedback-form');
+  let place;
+  if(typeof S!=='undefined'&&S.lesson){
+   if(!S.intro&&typeof rememberStep==='function')rememberStep();
+   place={id:S.lesson.id,step:S.i,intro:!!S.intro};
+  }else if(feedback){
+   const fields={};for(const el of feedback.elements){if(!el.name||el.name==='website')continue;const group=feedback.querySelectorAll(`input[type=checkbox][name="${el.name}"]`).length>1;fields[el.name]=group?[...(fields[el.name]||[]),...(el.checked?[el.value]:[])]:el.type==='checkbox'?el.checked:el.type==='radio'?(el.checked?el.value:fields[el.name]):el.value;}
+   place={view:'feedback',preview:!!document.querySelector('.feedback-page')?.dataset.preview,returnTo:JSON.parse(document.querySelector('.feedback-page')?.dataset.returnTo||'null'),fields};
+  }else if(document.querySelector('.completion-page'))place={view:'completion',preview:!!document.querySelector('.completion-page')?.dataset.preview,nickname:document.getElementById('completion-nickname')?.value||''};
+  else place={home:true,welcome:!!document.querySelector('.welcome-dialog[open]')};
+  place.scroll=scroll;
+  sessionStorage.setItem('spq.place',JSON.stringify(place));
+ }catch(e){}
  const url=new URL(location.href);url.searchParams.delete('lang');
  if(url.href===location.href)location.reload();else location.href=url.href;
 }
@@ -46,9 +61,9 @@ function courseNotation(text){
   // Existing inline/display TeX is already authored; never wrap it a second time.
   return text.split(/(\$\$[\s\S]*?\$\$|\$[^$]*?\$)/g).map((part,i)=>{
     if(i%2)return part;
-    return part.replace(/\|([\w+−\-ψφΦΨαβ]+)[>⟩]|(?<![A-Za-z0-9_\\])(?:q\d+|CNOT|SWAP|CZ|CX|HH|HZH|[xyz]|[HXYZST](?:\d+)?)(?![A-Za-z0-9_])/g,(token,state)=>{
+    return part.replace(/\|([\w+−\-ψφΦΨαβ]+)[>⟩]|(?<![A-Za-z0-9_\\])(?:[qp]\d+|CNOT|SWAP|CZ|CX|HH|HZH|[xyz]|[HXYZST](?:\d+)?)(?![A-Za-z0-9_])/g,(token,state)=>{
       if(state)return '$|'+state.replace(/[ψφΦΨαβ]/g,c=>({ψ:'\\psi',φ:'\\phi',Φ:'\\Phi',Ψ:'\\Psi',α:'\\alpha',β:'\\beta'}[c])+' ')+'\\rangle$';
-      const indexed=token.match(/^([qHXYZST])(\d+)$/);
+      const indexed=token.match(/^([qpHXYZST])(\d+)$/);
       return '$'+(indexed?indexed[1]+'_{'+indexed[2]+'}':token.length>1&&!/^H[HZ]*$/.test(token)?'\\mathrm{'+token+'}':token)+'$';
     });
   }).join('');
@@ -57,15 +72,15 @@ function courseNotation(text){
 function coursePlainNotation(text){
   // Native select menus cannot contain KaTeX HTML. Use readable Unicode there.
   return text.replace(/\|([\w+−\-ψφΦΨαβ]+)>/g,'|$1⟩')
-    .replace(/\b(q|[HXYZST])(\d+)\b/g,(_,symbol,index)=>symbol+[...index].map(n=>'₀₁₂₃₄₅₆₇₈₉'[n]).join(''));
+    .replace(/\b([qp]|[HXYZST])(\d+)\b/g,(_,symbol,index)=>symbol+[...index].map(n=>'₀₁₂₃₄₅₆₇₈₉'[n]).join(''));
 }
 
 // KaTeX (about 300 KB) is not part of the first screen: it starts loading as soon as this script runs, in parallel
 // with the rest of the course, so it is ready before a lesson needs it. Its two main fonts are fetched at the same
-// time rather than after the first formula renders. Roots typeset before it arrives wait in a queue.
+// time rather than after the first formula renders (Main-Bold too: questions are bold and full of formulas). Roots typeset before it arrives wait in a queue.
 const COURSE_MATH={state:'idle',queue:new Set(),
   css:'vendor/katex/katex.min.css',scripts:['vendor/katex/katex.min.js','vendor/katex/contrib/auto-render.min.js'],
-  fonts:['vendor/katex/fonts/KaTeX_Main-Regular.woff2','vendor/katex/fonts/KaTeX_Math-Italic.woff2']};
+  fonts:['vendor/katex/fonts/KaTeX_Main-Regular.woff2','vendor/katex/fonts/KaTeX_Math-Italic.woff2','vendor/katex/fonts/KaTeX_Main-Bold.woff2']};
 function ensureCourseMath(){
   if(typeof renderMathInElement==='function'){COURSE_MATH.state='ready';return}
   if(COURSE_MATH.state!=='idle'||typeof document==='undefined'||!document.head)return;
@@ -87,6 +102,8 @@ function unhideCourseMath(){document.querySelectorAll('.math-pending').forEach(e
 ensureCourseMath();
 function typesetCourseMath(root){
   if(!root)return;
+  // Circuit labels need no KaTeX code, so they are formatted at once instead of waiting for it.
+  courseSvgNotation(root);
   if(typeof renderMathInElement!=='function'){
     // Not loaded yet: briefly hide only the text that holds $…$ (so no raw TeX shows) and render once KaTeX arrives.
     const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);
@@ -110,7 +127,11 @@ function typesetCourseMath(root){
     ignoredTags:['script','noscript','style','textarea','pre','code','option','select','svg'],
     ignoredClasses:['katex','katex-display'],throwOnError:false
   });
-  // SVG text uses native spans, preserving its coordinates and text-anchor.
+}
+
+
+// SVG text uses native spans, preserving its coordinates and text-anchor.
+function courseSvgNotation(root){
   for(const label of root.querySelectorAll('svg text')){
     if(label.dataset.notation)continue;
     const original=label.textContent;
@@ -121,17 +142,20 @@ function typesetCourseMath(root){
     for(const [i,part] of formatted.split(/\$([^$]*)\$/g).entries()){
       const span=document.createElementNS('http://www.w3.org/2000/svg','tspan');
       if(i%2){
+        // Italic letters use KaTeX_Math (the font of formula letters, preloaded at start); KaTeX_Main italic would be
+        // one more download, and KaTeX fonts stay invisible until they arrive.
         span.setAttribute('font-family','KaTeX_Main, Times New Roman, serif');
-        const indexed=part.match(/^([qHXYZST])_\{(\d+)\}$/);
+        const italic=()=>{span.setAttribute('font-family','KaTeX_Math, Times New Roman, serif');span.setAttribute('font-style','italic')};
+        const indexed=part.match(/^([qpHXYZST])_\{(\d+)\}$/);
         if(indexed){
-          span.textContent=indexed[1];span.setAttribute('font-style','italic');
+          span.textContent=indexed[1];italic();
           const sub=document.createElementNS(span.namespaceURI,'tspan');
           sub.setAttribute('baseline-shift','sub');sub.setAttribute('font-size','70%');
-          sub.setAttribute('font-style','normal');sub.textContent=indexed[2];span.append(sub);
+          sub.setAttribute('font-style','normal');sub.setAttribute('font-family','KaTeX_Main, Times New Roman, serif');sub.textContent=indexed[2];span.append(sub);
         }else{
           span.textContent=part.replace(/\\rangle/g,'⟩').replace(/\\mathrm\{([^}]+)\}/g,'$1')
             .replace(/\\(psi|phi|Phi|Psi|alpha|beta)\s*/g,(_,name)=>({psi:'ψ',phi:'φ',Phi:'Φ',Psi:'Ψ',alpha:'α',beta:'β'}[name]));
-          if(/^[HXYZSTxyz]+$/.test(part))span.setAttribute('font-style','italic');
+          if(/^[HXYZSTxyz]+$/.test(part))italic();
         }
       }else span.textContent=part;
       label.append(span);
@@ -146,7 +170,7 @@ const COURSE_STORE='spq.course.v1';
 const COURSE_RESUME_STORE=COURSE_STORE+'.resume';
 const CAREER_DIRECTIONS=['hardware','software','theory','application'];
 // Progress is saved after every page and answer. If the lesson content has not changed, the bookmark resumes
-// with all answers; if it has, the learner goes back to the same page when it still exists (matched by content).
+// with all answers; if it has, the learner goes back to the same page, or as close to it as the edit allows.
 function courseHash(value){
  const text=JSON.stringify(value);let hash=2166136261;
  for(let i=0;i<text.length;i++)hash=Math.imul(hash^text.charCodeAt(i),16777619);
@@ -154,35 +178,51 @@ function courseHash(value){
 }
 function courseLessonRevision(lesson){return courseHash(lesson.revisionPages||lesson.pages)}
 function coursePageKey(lesson,step){return courseHash((lesson.revisionPages||lesson.pages)[step])}
+const COURSE_PAGE_KEYS=new WeakMap();
+function coursePageKeys(lesson){
+ const pages=lesson.revisionPages||lesson.pages,cached=COURSE_PAGE_KEYS.get(lesson);
+ if(cached&&cached.pages===pages)return cached.keys;
+ const keys=pages.map((_,i)=>coursePageKey(lesson,i));COURSE_PAGE_KEYS.set(lesson,{pages,keys});return keys;
+}
+function courseValidAnswer(page,answer){
+ if(!page)return undefined;
+ if(page.o){
+  const valid=n=>Number.isInteger(n)&&n>=0&&n<page.o.length;
+  if(page.multi&&Array.isArray(answer?.selected)&&answer.selected.every(valid))return {selected:answer.selected,submitted:answer.submitted===true};
+  if(!page.multi&&valid(answer))return answer;
+  return undefined;
+ }
+ if(page.art==='timeline'&&Number.isInteger(answer?.historyIndex))return {historyIndex:answer.historyIndex};
+ if(page.art==='careerDirections'&&CAREER_DIRECTIONS.includes(answer?.careerDirection))return {careerDirection:answer.careerDirection};
+ if(page.art==='careerNext'&&CAREER_DIRECTIONS.includes(answer?.careerInterest))return {careerInterest:answer.careerInterest};
+ if(page.art==='hardwareOverview'&&Number.isInteger(answer?.routeIndex)&&answer.routeIndex>=0&&answer.routeIndex<5)return {routeIndex:answer.routeIndex};
+ return undefined;
+}
 function courseCleanResume(value,lessons,done){
  if(!value||typeof value!=='object'||Array.isArray(value))return {};
  const object=v=>v&&typeof v==='object'&&!Array.isArray(v)?v:{};
  const records={};
  for(const [id,lesson] of Object.entries(lessons)){
-  const record=value[id],revision=courseLessonRevision(lesson);
+  const record=value[id],revision=courseLessonRevision(lesson),keys=coursePageKeys(lesson);
   if(done[id]||!record||!Number.isInteger(record.step)||record.step<0)continue;
+  const oldAnswers=object(record.answers),answers={};
   if(record.revision!==revision){
-   // The lesson was edited since this bookmark: keep the place, drop answers that may no longer line up.
-   const pages=lesson.revisionPages||lesson.pages;
-   const step=pages.findIndex((page,i)=>coursePageKey(lesson,i)===record.pageKey);
-   if(step>0)records[id]={revision,step,pageKey:record.pageKey,answers:{},carry:object(record.carry),carrySnapshots:{}};
+   // The lesson was edited since this bookmark. Return to the same page if it still exists; if that page
+   // itself was edited, to the page after the last earlier page that still exists; otherwise to the same
+   // position. Answers stay on pages whose content did not change.
+   const oldKeys=Array.isArray(record.keys)?record.keys:[];
+   let step=keys.indexOf(record.pageKey);
+   for(let j=Math.min(record.step,oldKeys.length)-1;step<0&&j>=0;j--){const k=keys.indexOf(oldKeys[j]);if(k>=0)step=k+1;}
+   if(step<0)step=record.step;
+   step=Math.min(step,lesson.pages.length-1);
+   if(step<=0)continue;
+   oldKeys.forEach((key,i)=>{const k=keys.indexOf(key),answer=k>=0?courseValidAnswer(lesson.pages[k],oldAnswers[i]):undefined;if(answer!==undefined&&k<step)answers[k]=answer;});
+   records[id]={revision,step,pageKey:keys[step],keys,answers,carry:object(record.carry),carrySnapshots:{}};
    continue;
   }
   if(record.step>=lesson.pages.length)continue;
-  const answers={};
-  lesson.pages.forEach((page,i)=>{
-   const answer=object(record.answers)[i];
-   if(page.o){
-    const valid=n=>Number.isInteger(n)&&n>=0&&n<page.o.length;
-    if(page.multi&&Array.isArray(answer?.selected)&&answer.selected.every(valid))answers[i]={selected:answer.selected,submitted:answer.submitted===true};
-    else if(!page.multi&&valid(answer))answers[i]=answer;
-   }
-   else if(page.art==='timeline'&&Number.isInteger(answer?.historyIndex))answers[i]={historyIndex:answer.historyIndex};
-   else if(page.art==='careerDirections'&&CAREER_DIRECTIONS.includes(answer?.careerDirection))answers[i]={careerDirection:answer.careerDirection};
-   else if(page.art==='careerNext'&&CAREER_DIRECTIONS.includes(answer?.careerInterest))answers[i]={careerInterest:answer.careerInterest};
-   else if(page.art==='hardwareOverview'&&Number.isInteger(answer?.routeIndex)&&answer.routeIndex>=0&&answer.routeIndex<5)answers[i]={routeIndex:answer.routeIndex};
-  });
-  records[id]={revision,step:record.step,pageKey:record.pageKey,answers,carry:object(record.carry),carrySnapshots:object(record.carrySnapshots)};
+  lesson.pages.forEach((page,i)=>{const answer=courseValidAnswer(page,oldAnswers[i]);if(answer!==undefined)answers[i]=answer;});
+  records[id]={revision,step:record.step,pageKey:record.pageKey,keys,answers,carry:object(record.carry),carrySnapshots:object(record.carrySnapshots)};
  }
  return records;
 }
@@ -576,14 +616,14 @@ function saveResume(){
 }
 function rememberStep(){
  if(!S.lesson||S.intro||S.done[S.lesson.id])return;
- S.resume[S.lesson.id]={revision:courseLessonRevision(S.lesson),step:S.i,pageKey:coursePageKey(S.lesson,S.i),answers:S.answers,carry:S.carry,carrySnapshots:S.carrySnapshots};
+ S.resume[S.lesson.id]={revision:courseLessonRevision(S.lesson),step:S.i,pageKey:coursePageKey(S.lesson,S.i),keys:coursePageKeys(S.lesson),answers:S.answers,carry:S.carry,carrySnapshots:S.carrySnapshots};
  saveResume();
 }
 window.addEventListener('pagehide',rememberStep);
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')rememberStep()});
 function fill(t){return String(t).replace(/\{([A-Za-z_]\w*)\}/g,(m,k)=>S.carry[k]!==undefined?S.carry[k]:m)}
 function typesetMath(root){typesetCourseMath(root)}
-function progressHeader(label,progress){return `<header class="site-header"><div class="shell"><div class="header-row"><a class="brand" href="https://space-qat.com/" aria-label="${L('访问量立方官网','Visit the SpaceQat website')}"><img src="assets/spaceqat-logo-600.png?v=20261103" alt="${L('量立方 SpaceQat','SpaceQat')}" width="4221" height="1639"></a><span class="step-label">${label}</span>${languageToggle()}</div><div class="progress" role="progressbar" aria-label="${L('课程完成进度','Course progress')}" aria-valuemin="0" aria-valuemax="${allIds().length}" aria-valuenow="${allIds().filter(id=>S.done[id]).length}"><span style="--progress:${progress}%"></span></div></div></header>`}
+function progressHeader(label,progress){return `<header class="site-header"><div class="shell"><div class="header-row"><a class="brand" href="https://space-qat.com/" aria-label="${L('访问量立方官网','Visit the SpaceQat website')}"><img src="assets/spaceqat-logo-600.png?v=20261103" alt="${L('量立方 SpaceQat','SpaceQat')}" width="4221" height="1639"></a>${label?`<span class="step-label">${label}</span>`:''}${languageToggle()}</div><div class="progress" role="progressbar" aria-label="${L('课程完成进度','Course progress')}" aria-valuemin="0" aria-valuemax="${allIds().length}" aria-valuenow="${allIds().filter(id=>S.done[id]).length}"><span style="--progress:${progress}%"></span></div></div></header>`}
 function siteFooter(){return `<footer class="site-footer"><div class="shell"><span>${L('© 2026 量立方 SpaceQat','© 2026 SpaceQat')}</span><a href="https://space-qat.com/">${L('量立方官网','SpaceQat website')}</a></div></footer>`}
 function showWelcome(){
   const dialog=document.createElement('dialog');
@@ -670,9 +710,9 @@ function next(){
   if(S.i<lesson.pages.length-1){S.i++;render();window.scrollTo(0,0);return}
   const wasComplete=courseIsComplete();
   if(!S.done[lesson.id])pendingAchievementStamps.add(lesson.id);
-  S.done[lesson.id]=1;save();
+  S.done[lesson.id]=1;save();window.CourseAnalytics?.lessonDone(lesson.id);
   delete S.resume[lesson.id];saveResume();
-  if(!wasComplete&&courseIsComplete()){showCourseCompletion();return}
+  if(!wasComplete&&courseIsComplete()){if(window.CourseFeedback)window.CourseFeedback.open();else showCourseCompletion();return}
   const nx=nextId(lesson.id);if(nx)open(nx,undefined,nx.split('-')[0]!==lesson.id.split('-')[0]);else{home();window.scrollTo(0,0)}
 }
 function previous(){
@@ -707,7 +747,7 @@ function render(){
   rememberStep();
 }
 // Button labels set by lessons and components; English is looked up here so every caller stays short.
-const GO_LABELS={'继续':'Continue','下一节':'Next lesson','进入下一章':'Next chapter','完成本节，返回地图':'Finish lesson, back to map','完成学习，查看旅程':'Finish and see your journey','确认答案':'Check answer','开始实验':'Start experiment','开始传态':'Start teleportation','进入练习':'Go to practice'};
+const GO_LABELS={'继续':'Continue','下一节':'Next lesson','进入下一章':'Next chapter','完成本节，返回地图':'Finish lesson, back to map','完成学习，填写结课问卷':'Finish and give feedback','确认答案':'Check answer','开始实验':'Start experiment','开始传态':'Start teleportation','进入练习':'Go to practice'};
 function go(label,on){const b=document.getElementById('go');b.textContent=LANG==='en'&&GO_LABELS[label]?GO_LABELS[label]:label;b.disabled=!on}
 function hint(s){const node=document.getElementById('hint');node.textContent=s||'';typesetMath(node)}
 function lead(p){
@@ -833,13 +873,14 @@ function restoreAnswer(p,s){
 
 /* ---------- 说 / 揭 ---------- */
 function pSay(p){
-  document.getElementById('scr').innerHTML=lead(p)+p.b.map(t=>`<p class="say${t.startsWith('$$')?' math-line':''}">${fill(t)}</p>`).join('');
+  // tailArt puts a figure after the text, for pages whose text introduces it.
+  document.getElementById('scr').innerHTML=lead(p)+p.b.map(t=>`<p class="say${t.startsWith('$$')?' math-line':''}">${fill(t)}</p>`).join('')+(p.tailArt&&ART[p.tailArt]?`<div class="say-art">${ART[p.tailArt](p)}</div>`:'');
   go('继续',true);
 }
 
 /* ---------- 看 ---------- */
 function pShow(p){
-  document.getElementById('scr').innerHTML=lead(p)+`<div>${ART[p.art](p)}</div><p class="cap">${fill(p.cap)}</p>`;
+  document.getElementById('scr').innerHTML=lead(p)+`<div>${ART[p.art](p)}</div>${p.cap?`<p class="cap">${fill(p.cap)}</p>`:''}`;
   if(p.art==='hardwareOverview')bindHardwareOverview(document.getElementById('scr'));
   if(p.art==='timeline'){
     const events=[...document.querySelectorAll('#scr .history-event')],step=S.i,answers=S.answers;
@@ -888,9 +929,14 @@ function pEnd(p){
     <div class="recap-bridge"><h3>${p.bridge}</h3><p>${p.next}</p></div>
   </section>`:`<div class="done">
     <div class="seal">✓</div><div class="able${p.steps?' able-checklist':''}">${paragraphs}${p.steps?`<ol>${p.steps.map(step=>`<li>${fill(step)}</li>`).join('')}</ol>`:''}</div></div>`;
+  if(window.CourseFeedback){
+   document.getElementById('scr').insertAdjacentHTML('beforeend',`<p class="lesson-feedback-entry"><button type="button" id="lesson-feedback" class="text-button">${L('本节反馈','Give feedback on this lesson')}</button></p>`);
+   const returnTo={id:S.lesson.id,step:S.i};
+   document.getElementById('lesson-feedback').onclick=()=>window.CourseFeedback.open({preview:true,returnTo});
+  }
   const nx=nextId(S.lesson.id);
   const finishesCourse=!courseIsComplete()&&allIds().every(id=>id===S.lesson.id||S.done[id]);
-  go(finishesCourse?'完成学习，查看旅程':nx?(nx.split('-')[0]===S.lesson.id.split('-')[0]?'下一节':'进入下一章'):'完成本节，返回地图',true);
+  go(finishesCourse?'完成学习，填写结课问卷':nx?(nx.split('-')[0]===S.lesson.id.split('-')[0]?'下一节':'进入下一章'):'完成本节，返回地图',true);
 }
 ;
 /* js/island.js */
@@ -1081,11 +1127,12 @@ function renderIslandHome(preferredChapter){
  app.innerHTML=progressHeader('',courseProgressPercent())+`<main id="main-content" class="island-home shell">
   <div class="island-intro"><h1>${L('量子计算入门课程','Introduction to Quantum Computing')}</h1></div>
   ${progressNotice?`<p class="curriculum-note" role="status">${progressNotice}</p>`:''}
-  ${courseIsComplete()?`<section class="completion-entry" aria-label="${L('结课纪念','Course completion')}"><div><strong>${L(`你已完成全部 ${chapters.length} 章 ${total} 节`,`You have finished all ${chapters.length} chapters and ${total} lessons`)}</strong><p>${L('查看你的学习旅程，保存一张结课纪念卡。','See your learning journey and save a keepsake card.')}</p></div><button id="view-completion" class="primary">${L('查看我的学习旅程','See my learning journey')}</button></section>`:''}
+  ${courseIsComplete()?`<section class="completion-entry" aria-label="${L('结课纪念','Course completion')}"><div><strong>${L('你已完成全部课程','You have finished the whole course')}</strong></div><button id="open-feedback" class="ghost">${L('填写结课问卷','Course feedback')}</button><button id="view-completion" class="primary">${L('查看我的学习旅程','See my learning journey')}</button></section>`:''}
   <div class="island-layout"><section class="island-panel" aria-labelledby="map-heading">${courseIsland(got,total)}<div class="island-progress"><span>${L(`<strong>${got}</strong> / ${total} 节已完成`,`<strong>${got}</strong> / ${total} lessons done`)}</span><div class="island-progress-track" aria-hidden="true"><span style="width:${got/total*100}%"></span></div></div></section>
   <nav class="island-directory" aria-labelledby="syllabus-heading"><div class="syllabus-heading"><h2 id="syllabus-heading">${L('课程目录','Course outline')}</h2><button id="reset" type="button" class="reset-progress"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 13a8 8 0 1 0 8-8"/><path d="M15 2l-3 3 3 3"/></svg>${L('清除进度','Reset progress')}</button></div><div class="course-map">${chapters.map(([key,level],i)=>{
    return `<details class="level" id="chapter-${key}" data-level="${key}" name="course-chapters"><summary class="level-head" data-chapter="${key}"><span class="level-title"><span class="level-index">${L(`第 ${i+1} 章`,`Chapter ${i+1}`)}</span>${level.name}</span><span class="level-toggle" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m5 9 7 7 7-7"/></svg></span></summary><div class="level-rows">${level.list.map(id=>`<button class="map-row${S.done[id]?' done':''}${id===next?' current':''}" data-id="${id}" ${id===next?'aria-current="step"':''} aria-label="${LESSONS[id].title}${L('，',', ')}${S.done[id]?L('已完成','done'):S.resume[id]?L('学习中','in progress'):L('未完成','not done')}"><span class="map-no" aria-hidden="true">${courseAchievementBadge(!!S.done[id])}</span><span class="map-title">${LESSONS[id].title}</span></button>`).join('')}</div></details>`;
   }).join('')}</div><button class="primary start" id="start"></button></nav></div></main>`+siteFooter();
+ document.getElementById('open-feedback')?.addEventListener('click',()=>window.CourseFeedback?.open({force:true}));
  document.getElementById('view-completion')?.addEventListener('click',showCourseCompletion);
  const directory=app.querySelector('.island-directory'),levels=[...directory.querySelectorAll('.level')];
  const pins=[...app.querySelectorAll('.island-pin')],start=directory.querySelector('#start');
@@ -1400,21 +1447,21 @@ const hardwarePhoto=(file,alt,width,height,caption,kind='')=>`<figure class="har
 </figure>`;
 const ROUTE_ART={
   fridgePhoto:()=>`<figure class="hardware-photo">
-    <img src="assets/illustrations/ibm-quantum-hardware.jpg" alt="${L('超导量子计算机中的金色多层装置，层间连接着许多线缆。','The gold, multi-tiered assembly inside a superconducting quantum computer, with many cables running between the tiers.')}" width="670" height="1023">
+    <img src="assets/illustrations/ibm-quantum-hardware-500.webp" alt="${L('超导量子计算机中的金色多层装置，层间连接着许多线缆。','The gold, multi-tiered assembly inside a superconducting quantum computer, with many cables running between the tiers.')}" width="670" height="1023">
     <figcaption><a href="https://www.flickr.com/photos/ibm_research_zurich/26774599148/" target="_blank" rel="noopener noreferrer">IBM Quantum Dilution Refrigerator (interior)</a>${L('。摄影：Graham Carlow for IBM，发布：IBM Research。','. Photo: Graham Carlow for IBM; published by IBM Research. ')}<a href="https://creativecommons.org/licenses/by-nd/2.0/" target="_blank" rel="noopener noreferrer">CC BY-ND 2.0</a>${L('；原图等比例展示。','; shown at original proportions.')}</figcaption>
   </figure>`,
-  ion:()=>hardwarePhoto('nist-ion-trap.webp',L('NIST 离子阱实物：金色电极和连接线汇聚到中央囚禁区域。','A real NIST ion trap: gold electrodes and wires converge on the central trapping region.'),960,666,
+  ion:()=>hardwarePhoto('nist-ion-trap-500.webp',L('NIST 离子阱实物：金色电极和连接线汇聚到中央囚禁区域。','A real NIST ion trap: gold electrodes and wires converge on the central trapping region.'),960,666,
     L('<a href="https://www.nist.gov/image/ion-trap-1" target="_blank" rel="noopener noreferrer">Ion Trap</a>。图片：Blakestad/NIST。依据 <a href="https://www.nist.gov/copyrights-disclaimers" target="_blank" rel="noopener noreferrer">NIST 公开信息使用政策</a>使用。',
       '<a href="https://www.nist.gov/image/ion-trap-1" target="_blank" rel="noopener noreferrer">Ion Trap</a>. Image: Blakestad/NIST. Used under the <a href="https://www.nist.gov/copyrights-disclaimers" target="_blank" rel="noopener noreferrer">NIST public information policy</a>.')),
-  atom:()=>hardwarePhoto('cesium-optical-tweezer-array.png',L('铯原子阵列的真实荧光成像：亮点呈规则网格排列，显示激光光阱中原子的分布；图像经过多次平均和伪彩色处理。','A real fluorescence image of a cesium atom array: bright dots in a regular grid show where atoms sit in the laser traps. The image is averaged over many shots and false-colored.'),643,644,
+  atom:()=>hardwarePhoto('cesium-optical-tweezer-array-500.webp',L('铯原子阵列的真实荧光成像：亮点呈规则网格排列，显示激光光阱中原子的分布；图像经过多次平均和伪彩色处理。','A real fluorescence image of a cesium atom array: bright dots in a regular grid show where atoms sit in the laser traps. The image is averaged over many shots and false-colored.'),643,644,
     L('<a href="https://commons.wikimedia.org/wiki/File:1225_site_cold_cesium_atom_array.png" target="_blank" rel="noopener noreferrer">1225 site cold cesium atom array</a>。作者：Preston Huft。<a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer">CC BY 4.0</a>；原图等比例展示，平均与伪彩色处理来自原作者。',
       '<a href="https://commons.wikimedia.org/wiki/File:1225_site_cold_cesium_atom_array.png" target="_blank" rel="noopener noreferrer">1225 site cold cesium atom array</a>. Author: Preston Huft. <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer">CC BY 4.0</a>; shown at original proportions. Averaging and false color by the original author.'),'hardware-atom-photo'),
-  silicon:()=>hardwarePhoto('silicon-six-qubit-device.jpg',L('硅基量子点器件的伪彩色扫描电镜图：一排金属栅极在硅中形成 6 个量子点（标号 1–6），两端是用于读出的传感点 SD1、SD2，上方覆盖微磁体。','False-color electron micrograph of a silicon quantum-dot device: a row of metal gates forms 6 quantum dots in the silicon (labeled 1–6), with readout sensor dots SD1 and SD2 at the ends and a micromagnet on top.'),1140,566,
+  silicon:()=>hardwarePhoto('silicon-six-qubit-device-500.webp',L('硅基量子点器件的伪彩色扫描电镜图：一排金属栅极在硅中形成 6 个量子点（标号 1–6），两端是用于读出的传感点 SD1、SD2，上方覆盖微磁体。','False-color electron micrograph of a silicon quantum-dot device: a row of metal gates forms 6 quantum dots in the silicon (labeled 1–6), with readout sensor dots SD1 and SD2 at the ends and a micromagnet on top.'),1140,566,
     L('硅量子点六比特处理器（与实验所用器件同款）的伪彩色电镜图。© 2022 <span data-no-math>S. G. J. Philips</span> et al.，<a href="https://doi.org/10.1038/s41586-022-05117-x" target="_blank" rel="noopener noreferrer">Universal control of a six-qubit quantum processor in silicon</a>，Nature 609, 919–924 (2022)，图 1。<a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer">CC BY 4.0</a>；局部视图取自图 1(a)，保留原图标注。',
       'False-color electron micrograph of a six-qubit silicon quantum-dot processor (same design as the one used in the experiment). © 2022 <span data-no-math>S. G. J. Philips</span> et al., <a href="https://doi.org/10.1038/s41586-022-05117-x" target="_blank" rel="noopener noreferrer">Universal control of a six-qubit quantum processor in silicon</a>, Nature 609, 919–924 (2022), Fig. 1. <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer">CC BY 4.0</a>; detail from Fig. 1(a), original labels kept.')),
   photon:()=>`<figure class="hardware-photo">
     <div class="hardware-photon-detail">
-      <img src="assets/illustrations/quix-photonic-processor-figure.jpg" alt="${L('QuiX 光子处理器实物近照：光纤阵列连接中央光子芯片，周围是控制电路与温控组件。原图标有光纤阵列、印刷电路板、驱动器和温控元件。','Close-up of the QuiX photonic processor: a fiber array connects to the central photonic chip, surrounded by control electronics and temperature-control parts. The original figure labels the fiber array, printed circuit board, drivers and temperature-control elements.')}" width="1166" height="773">
+      <img src="assets/illustrations/quix-photonic-processor-figure-500.webp" alt="${L('QuiX 光子处理器实物近照：光纤阵列连接中央光子芯片，周围是控制电路与温控组件。原图标有光纤阵列、印刷电路板、驱动器和温控元件。','Close-up of the QuiX photonic processor: a fiber array connects to the central photonic chip, surrounded by control electronics and temperature-control parts. The original figure labels the fiber array, printed circuit board, drivers and temperature-control elements.')}" width="1166" height="773">
     </div>
     <figcaption>${L('QuiX 光子处理器。© 2021 C. Taballione et al.，','QuiX photonic processor. © 2021 C. Taballione et al., ')}<a href="https://doi.org/10.1088/2633-4356/ac168c" target="_blank" rel="noopener noreferrer">A universal fully reconfigurable 12-mode quantum photonic processor</a>${L('，Materials for Quantum Technology 1, 035002 (2021)，图 1。',', Materials for Quantum Technology 1, 035002 (2021), Fig. 1. ')}<a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer">CC BY 4.0</a>${L('；局部视图取自图 1(c)，保留原图标注。','; detail from Fig. 1(c), original labels kept.')}</figcaption>
   </figure>`
@@ -1772,7 +1819,7 @@ function labCodeStage(model,p){
   const sampling=part==='execute'?`<div class="lab-sampling"><label>${L('重复次数','Shots')} <select aria-label="${L('重复次数','Shots')}">${[8,100,1000].map(n=>`<option value="${n}"${model.shots===n?' selected':''}>${L(`${n} 次`,`${n}`)}</option>`).join('')}</select></label><button class="primary" type="button" data-action="run">${L('采样当前线路','Sample this circuit')}</button></div>`:'';
   const output=part==='execute'?`<div class="lab-stage-output">${labCompactOutput(model,L('尚未采样。','Not sampled yet.'))}</div>`:'';
   const explanation=part==='execute'?'':labExplanation(part,model);
-  return `<section class="lab lab-guided lab-stage" data-stage="${part}" aria-label="${L('FatQat 分步实验','FatQat step-by-step experiment')}"><div class="lab-stage-circuit">${labCircuit(model,part)}</div><section class="lab-code-step is-selected" data-step="${part}" data-code-copy-scope><div class="lab-step-pair"><div class="lab-code-container">${codeToolbar(L('复制本段代码','Copy this code'))}<button type="button" class="lab-code-fragment" data-part="${part}" data-code-part="${part}" aria-label="${L('查看本页代码对应关系','Show how this code maps to the circuit')}" aria-pressed="true"><code>${labEscape(code)}</code></button></div><div class="lab-step-demo"><p class="lab-step-explanation">${explanation}</p></div></div></section>${sampling}${output}${part==='execute'?`<details class="lab-full-code"><summary>${L('查看与复制完整 Python 代码','View and copy the full Python code')}</summary>${codeBlock(labCode(model))}</details><details class="lab-probability-details"><summary>${L('查看理论概率与采样对照','Compare theoretical probabilities with samples')}</summary>${labResults(model)}</details>`:''}</section>`;
+  return `<section class="lab lab-guided lab-stage" data-stage="${part}" aria-label="${L('FatQat 分步实验','FatQat step-by-step experiment')}"><div class="lab-stage-circuit">${labCircuit(model,part)}</div><section class="lab-code-step is-selected" data-step="${part}" data-code-copy-scope><div class="lab-step-pair${explanation?'':' is-solo'}"><div class="lab-code-container">${codeToolbar(L('复制本段代码','Copy this code'))}<button type="button" class="lab-code-fragment" data-part="${part}" data-code-part="${part}" aria-label="${L('查看本页代码对应关系','Show how this code maps to the circuit')}" aria-pressed="true"><code>${labEscape(code)}</code></button></div>${explanation?`<div class="lab-step-demo"><p class="lab-step-explanation">${explanation}</p></div>`:''}</div></section>${sampling}${output}${part==='execute'?`<details class="lab-full-code"><summary>${L('查看与复制完整 Python 代码','View and copy the full Python code')}</summary>${codeBlock(labCode(model))}</details><details class="lab-probability-details"><summary>${L('查看理论概率与采样对照','Compare theoretical probabilities with samples')}</summary>${labResults(model)}</details>`:''}</section>`;
 }
 // Pair short code fragments with their explanations and live experiment controls.
 function labGuidedExperiment(model,p){
@@ -1920,14 +1967,13 @@ ART.quantumStack=(p={})=>{
     <text class="quantum-stack-label" x="${x+w/2+21}" y="${y+34}" text-anchor="middle">${name}</text>
    </g>`).join('')}
   </svg>
-  <figcaption class="quantum-stack-focus">${p.recap?L('线路 → 编译安排 → 控制信号 → 硬件执行','Circuit → compiled schedule → control signals → hardware execution'):L('本章重点：物理硬件，以及连接线路与硬件的编译','This chapter’s focus: physical hardware, and the compilation that connects circuits to it')}</figcaption>
  </figure>`;
 };
 ART.interferenceSums=()=>`<section aria-label="${L('H 门后的概率幅合成','Adding amplitudes after the H gate')}">
- ${[
-  [L('$|+\\rangle$经过 H','$|+\\rangle$ through H'),[['0','+1/2 + 1/2 = 1','100%'],['1','+1/2 − 1/2 = 0','0%']]],
-  [L('$|-\\rangle$经过 H','$|-\\rangle$ through H'),[['0','+1/2 − 1/2 = 0','0%'],['1','+1/2 + 1/2 = 1','100%']]]
- ].map(([title,rows])=>`<table class="compile-probabilities"><caption>${title}</caption><thead><tr><th scope="col">${L('最终结果','Final outcome')}</th><th scope="col">${L('概率幅合成','Amplitudes added')}</th><th scope="col">${L('概率','Probability')}</th></tr></thead><tbody>${rows.map(([out,sum,prob])=>`<tr><th scope="row">${out}</th><td>${sum}</td><td>${prob}</td></tr>`).join('')}</tbody></table>`).join('')}
+ <table class="compile-probabilities interference-sums"><thead><tr><th scope="col">${L('初态','Input')}</th><th scope="col">${L('结果','Outcome')}</th><th scope="col">${L('概率幅相加','Amplitudes added')}</th><th scope="col">${L('概率','Probability')}</th></tr></thead><tbody>${[
+  ['$|+\\rangle$',[['0','+1/2 + 1/2 = 1','100%'],['1','+1/2 − 1/2 = 0','0%']]],
+  ['$|-\\rangle$',[['0','+1/2 − 1/2 = 0','0%'],['1','+1/2 + 1/2 = 1','100%']]]
+ ].map(([state,rows])=>rows.map(([out,sum,prob],k)=>`<tr>${k?'':`<th scope="rowgroup" rowspan="2">${state}</th>`}<th scope="row">${out}</th><td>${sum}</td><td>${prob}</td></tr>`).join('')).join('')}</tbody></table>
  </section>`;
 ART.shorPeriod=()=>`<table class="compile-probabilities"><caption>${L('2 的幂除以 15 的余数','Remainders of powers of 2 divided by 15')}</caption><thead><tr><th scope="col">${L('指数 x','Exponent x')}</th><th scope="col">${L('2 的 x 次方','2 to the power x')}</th><th scope="col">${L('除以 15 的余数','Remainder after dividing by 15')}</th></tr></thead><tbody>${Array.from({length:8},(_,x)=>`<tr class="${x%4===0?'has-probability':''}"><th scope="row">${x}</th><td>${2**x}</td><td>${2**x%15}</td></tr>`).join('')}</tbody></table>`;
 ART.timeline=(p={})=>{
@@ -1984,6 +2030,7 @@ ART.algorithmOverview=()=>`<table class="compile-probabilities algorithm-overvie
  ${[
   [L('寻找目标','Find a target'),'Grover',L('在没有排序等线索时，减少寻找目标所需的检查次数。','When there is no sorting or other clue, it reduces the number of checks needed to find a target.')],
   [L('分解整数','Factor integers'),'Shor',L('利用周期信息，找到整数的因数。','It uses period information to find the factors of an integer.')],
+  [L('求解线性方程组','Solve linear equations'),'HHL',L('满足特定条件时（例如矩阵稀疏，且只需要解的整体性质），加速求解大型线性方程组；不少量子机器学习方法以它为基础。','Under specific conditions (for example, a sparse matrix, and only overall properties of the solution are needed), it speeds up solving large systems of linear equations; many quantum machine-learning methods build on it.')],
   [L('研究分子与材料','Study molecules and materials'),L('量子模拟<br>VQE','Quantum simulation<br>VQE'),L('模拟量子系统的演化，或寻找低能量状态。','It simulates how quantum systems evolve, or searches for low-energy states.')],
   [L('寻找较好的方案','Find good solutions'),'QAOA',L('针对组合优化问题，结合量子线路与经典调参寻找候选方案；不保证得到最优解。','For combinatorial optimization problems, it combines quantum circuits with classical parameter tuning to find candidate solutions; the best solution is not guaranteed.')]
  ].map(([task,name,description])=>`<tr><th scope="row">${task}</th><td>${name}</td><td>${description}</td></tr>`).join('')}
@@ -1991,8 +2038,8 @@ ART.algorithmOverview=()=>`<table class="compile-probabilities algorithm-overvie
 
 // Career exploration is an interest choice, never a scored question.
 const CAREER_PATHS=[
- {id:'hardware',title:L('硬件与实验','Hardware and experiments'),work:L('制备、控制和读出量子比特，校准设备并分析误差。','Prepare, control, and read out qubits; calibrate devices and analyze errors.'),basis:L('物理、电子或光学，以及实验与数据分析。不同硬件路线需要的具体知识不同。','Physics, electronics, or optics, plus experiments and data analysis. Each hardware platform calls for its own specific knowledge.'),task:L('选择一种硬件路线，画出准备、控制、读出的过程。','Pick a hardware platform and sketch how it prepares, controls, and reads out qubits.'),steps:[L('从本课介绍的硬件路线中选一种。','Choose one of the hardware platforms from this course.'),L('标出量子比特由什么承载，以及怎样准备、控制和读出。','Label what physically carries the qubit, and how it is prepared, controlled, and read out.'),L('圈出一个你还想进一步了解的实验环节。','Circle one experimental step you want to learn more about.')],result:L('一张流程图，以及一个想继续研究的问题。','A flowchart, plus one question you want to keep exploring.')},
- {id:'software',title:L('软件与系统','Software and systems'),work:L('开发编程工具、编译器与运行系统，让量子程序能够表达、转换和执行。','Build programming tools, compilers, and runtime systems so quantum programs can be written, transformed, and run.'),basis:L('编程、数据结构、软件工程，以及量子线路与硬件约束的基础知识。','Programming, data structures, and software engineering, plus the basics of quantum circuits and hardware constraints.'),task:L('修改刚才的 FatQat 代码，对照线路解释变化。','Modify the FatQat code you just saw, and use the circuit to explain what changed.'),steps:[L('从刚才的单比特实验开始，在准备 |0⟩ 后连续施加两个 H 门。','Start from the single-qubit experiment: after preparing |0⟩, apply two H gates in a row.'),L('先预测测量结果，再在配置好的 FatQat 环境中运行。','Predict the measurement outcome first, then run it in a configured FatQat environment.'),L('对照线路，解释两个 H 的整体作用，并与只施加一个 H 时比较。','Using the circuit, explain the combined effect of the two H gates, and compare it with applying just one H.')],result:L('一段修改后的代码，以及对预测和计数结果的解释。','Your modified code, plus an explanation of your prediction and the counts.')},
+ {id:'hardware',title:L('硬件与实验','Hardware and experiments'),work:L('制备、控制和读出量子比特，校准设备并分析误差。','Prepare, control, and read out qubits; calibrate devices and analyze errors.'),basis:L('物理、电子或光学，以及实验与数据分析。不同硬件路线需要的具体知识不同。','Physics, electronics, or optics, plus experiments and data analysis. Each hardware platform calls for its own specific knowledge.'),task:L('选择一种硬件路线，画出准备、控制、读出的过程。','Pick a hardware platform and sketch how it prepares, controls, and reads out qubits.'),steps:[L('从本课程介绍的硬件路线中选一种。','Choose one of the hardware platforms from this course.'),L('标出量子比特由什么承载，以及怎样准备、控制和读出。','Label what physically carries the qubit, and how it is prepared, controlled, and read out.'),L('圈出一个你还想进一步了解的实验环节。','Circle one experimental step you want to learn more about.')],result:L('一张流程图，以及一个想继续研究的问题。','A flowchart, plus one question you want to keep exploring.')},
+ {id:'software',title:L('软件与系统','Software and systems'),work:L('开发编程工具、编译器与运行系统，让量子程序能够表达、转换和执行。','Build programming tools, compilers, and runtime systems so quantum programs can be written, transformed, and run.'),basis:L('编程、数据结构、软件工程、计算机体系结构，以及量子线路与硬件约束的基础知识。','Programming, data structures, software engineering, and computer architecture, plus the basics of quantum circuits and hardware constraints.'),task:L('修改刚才的 FatQat 代码，对照线路解释变化。','Modify the FatQat code you just saw, and use the circuit to explain what changed.'),steps:[L('从刚才的单比特实验开始，在准备 |0⟩ 后连续施加两个 H 门。','Start from the single-qubit experiment: after preparing |0⟩, apply two H gates in a row.'),L('先预测测量结果，再在配置好的 FatQat 环境中运行。','Predict the measurement outcome first, then run it in a configured FatQat environment.'),L('对照线路，解释两个 H 的整体作用，并与只施加一个 H 时比较。','Using the circuit, explain the combined effect of the two H gates, and compare it with applying just one H.')],result:L('一段修改后的代码，以及对预测和计数结果的解释。','Your modified code, plus an explanation of your prediction and the counts.')},
  {id:'theory',title:L('算法与理论','Algorithms and theory'),work:L('研究量子算法、纠错方法，以及量子计算能解决哪些问题、需要多少资源。','Study quantum algorithms and error-correction methods, which problems quantum computers can solve, and how many resources they need.'),basis:L('线性代数、概率、算法与量子信息，随具体问题逐步深入。','Linear algebra, probability, algorithms, and quantum information, going deeper as specific problems require.'),task:L('改变 Grover 的迭代次数，记录目标概率怎样变化。','Change the number of Grover iterations and record how the target probability changes.'),steps:[L('回到 Grover 实验，保持搜索目标不变。','Go back to the Grover experiment and keep the search target the same.'),L('比较不同迭代次数下的目标概率。','Compare the target probability for different numbers of iterations.'),L('记录概率是否一直增加，解释为什么不能只靠增加迭代次数。','Note whether the probability keeps rising, and explain why more iterations alone are not the answer.')],result:L('一份迭代次数与目标概率的记录，以及你的解释。','A record of iterations vs. target probability, with your explanation.')},
  {id:'application',title:L('应用与交叉研究','Applications and interdisciplinary research'),work:L('把领域问题转成计算任务，比较量子与经典方法的效果和成本。','Turn problems from other fields into computing tasks, and compare quantum and classical methods on results and cost.'),basis:L('领域知识、数学建模、计算与验证，以及对量子算法适用条件的理解。','Domain knowledge, mathematical modeling, computation and validation, plus an understanding of when quantum algorithms apply.'),task:L('选一个熟悉的问题，写清输入、希望得到的结果，以及现有解决方法。','Pick a problem you know well, and write down its inputs, the result you want, and how it is solved today.'),steps:[L('选一个你能具体描述的问题，例如一项排班任务。','Choose a problem you can describe concretely, such as a scheduling task.'),L('列出输入、限制条件，以及怎样判断结果好不好。','List the inputs, the constraints, and how to judge whether a result is good.'),L('写出一种现有解决方法，再列出判断量子方法是否适用还缺少的信息。','Write down one existing solution, then list what information is still missing to judge whether a quantum method fits.')],result:L('一张问题说明卡。无需预设量子方法一定更好。','A problem card. No need to assume a quantum method must be better.')}
 ];
@@ -2089,16 +2136,14 @@ function mziScene(p0,p1,deg){
 
 COMP.mzi=(slot,p)=>{
  const key='mzi-phi';
- let deg=Number.isInteger(S.carry[key])?S.carry[key]:0,counts=null;
+ let deg=Number.isInteger(S.carry[key])?S.carry[key]:0;
  const seen=new Set(S.carry['mzi-seen']||[]);
  slot.innerHTML=`<section class="mzi" aria-label="${L('马赫-曾德尔干涉仪实验','Mach–Zehnder interferometer experiment')}">
   <div class="mzi-figure"></div>
   <label class="mzi-slider"><span>${L('上方路径的相位 φ','Upper-path phase φ')}</span><input type="range" min="0" max="360" step="1" value="${deg}" aria-label="${L('上方路径的相位 φ，单位度','Upper-path phase φ, in degrees')}"><strong class="mzi-deg"></strong></label>
   <div class="mzi-detectors" aria-live="polite"></div>
-  <div class="mzi-actions"><button type="button" class="secondary mzi-fire">${L('发射 100 个光子','Send 100 photons')}</button><span class="mzi-counts"></span></div>
-  <p class="mzi-note">${L('分束器的作用和 H 门相同；相位片只改变上方路径的相位，相当于给 $|1\\rangle$ 分量乘上 $e^{i\\varphi}$。每个探测器收到的，是两条路径概率幅之和。','A beam splitter acts like an H gate. The phase shifter changes only the upper path’s phase, which multiplies the $|1\\rangle$ part by $e^{i\\varphi}$. Each detector receives the sum of the two paths’ amplitudes.')}</p>
  </section>`;
- const figure=slot.querySelector('.mzi-figure'),range=slot.querySelector('input'),out=slot.querySelector('.mzi-deg'),dets=slot.querySelector('.mzi-detectors'),countsNode=slot.querySelector('.mzi-counts');
+ const figure=slot.querySelector('.mzi-figure'),range=slot.querySelector('input'),out=slot.querySelector('.mzi-deg'),dets=slot.querySelector('.mzi-detectors');
  const pct=v=>(Math.abs(v)<5e-4?0:Math.abs(1-v)<5e-4?100:v*100).toFixed(v<5e-4||1-v<5e-4?0:1)+'%';
  function draw(){
   const phi=deg*Math.PI/180,[p0,p1]=MZI.probabilities(phi);
@@ -2108,21 +2153,14 @@ COMP.mzi=(slot,p)=>{
    <p class="mzi-detector-name">${L(`探测器 ${i}`,`Detector ${i}`)}</p>${mziPhasor(phi,sign)}
    <p class="mzi-detector-caption">${i===0?L('两条路径的概率幅首尾相接','The two paths’ amplitudes add head to tail'):L('上方路径的贡献多一个负号（箭头反向）','The upper path picks up a minus sign (arrow reversed)')}</p>
    <p class="mzi-detector-prob"><strong>${pct(v)}</strong><span class="mzi-bar"><span style="width:${(v*100).toFixed(2)}%"></span></span></p>
-   ${counts?`<p class="mzi-detector-count">${L(`本次接收 ${counts[i]} 个`,`Received this run: ${counts[i]}`)}</p>`:''}</div>`).join('');
-  countsNode.textContent=counts?L(`共 ${counts[0]+counts[1]} 个光子：探测器 0 收到 ${counts[0]} 个，探测器 1 收到 ${counts[1]} 个`,`${counts[0]+counts[1]} photons: detector 0 got ${counts[0]}, detector 1 got ${counts[1]}`):'';
+</div>`).join('');
   if(deg<=10||deg>=350)seen.add('bright');
   if(deg>=170&&deg<=190)seen.add('dark');
   S.carry[key]=deg;S.carry['mzi-seen']=[...seen];
   check(p,{seen:[...seen],deg,p0,p1});
  }
- range.addEventListener('input',()=>{deg=Number(range.value);counts=null;draw()});
- slot.querySelector('.mzi-fire').onclick=()=>{
-  const p0=MZI.probabilities(deg*Math.PI/180)[0];counts=[0,0];
-  for(let i=0;i<100;i++)counts[Math.random()<p0?0:1]++;
-  draw();
- };
+ range.addEventListener('input',()=>{deg=Number(range.value);draw()});
  draw();
- typesetMath(slot.querySelector('.mzi-note'));
 };
 
 // Static set-up figure shown before the prediction: no phase value, both exits drawn alike.
@@ -2147,7 +2185,7 @@ function studioGrover(target,stage){
 function groverLockCards(stage,revealed){
  const probabilities=studioGrover(2,stage).probabilities;
  return `<div class="grover-passwords" role="group" aria-label="${L('四个候选密码','Four candidate codes')}">${['00','01','10','11'].map((label,i)=>`<div class="grover-password${stage>0&&i===2?' is-target':''}">
-  <strong class="grover-code">${label}</strong><span class="grover-mark">${stage===1&&i===2?L('− 相位标记','− phase mark'):stage>0&&i===2?L('正确密码','Correct code'):L('候选密码','Candidate code')}</span>
+  <strong class="grover-code">${label}</strong>${stage>0?`<span class="grover-mark">${i!==2?'':stage===1?L('− 相位标记','− phase mark'):L('正确密码','Correct code')}</span>`:''}
   <span class="grover-meter" aria-hidden="true"><i style="--probability:${revealed?probabilities[i]*100:0}%"></i></span>
   <span class="grover-probability" aria-label="${L(`密码 ${label} 的测量概率 ${revealed?studioPct(probabilities[i]):'待观察'}`,`Measurement probability for code ${label}: ${revealed?studioPct(probabilities[i]):'not shown yet'}`)}">${revealed?studioPct(probabilities[i]):L('待观察','Not yet seen')}</span>
  </div>`).join('')}</div>`;
@@ -2167,15 +2205,16 @@ COMP.groverLock=(slot,p)=>{
   const answered=prediction!==null,finished=p.action?acted:answered;
   const stage=acted?p.nextStage:p.stage;
   const revealed=p.phase!=='task'&&(p.phase!=='prepare'||answered);
-  const caption=p.phase==='task'?L('四选一教学模型','Teaching model: find 1 code out of 4'):p.phase==='recap'?L('回顾：一轮标记＋放大后的理论概率','Recap: theoretical probabilities after one round of mark + amplify'):!revealed?'':stage===0?L('均匀准备后的理论概率','Theoretical probabilities after an equal superposition'):stage===1?L('标记后的理论概率','Theoretical probabilities after marking'):stage===2?L('一轮标记＋放大后的理论概率','Theoretical probabilities after one round of mark + amplify'):L('两轮标记＋放大后的理论概率','Theoretical probabilities after two rounds of mark + amplify');
+  const caption=p.phase==='task'?'':p.phase==='recap'?'':!revealed?'':stage===0?L('均匀准备后的理论概率','Theoretical probabilities after an equal superposition'):stage===1?L('标记后的理论概率','Theoretical probabilities after marking'):stage===2?L('一轮标记＋放大后的理论概率','Theoretical probabilities after one round of mark + amplify'):L('两轮标记＋放大后的理论概率','Theoretical probabilities after two rounds of mark + amplify');
   slot.innerHTML=`<section class="grover-lock" aria-label="${L('密码锁实验','Combination lock experiment')}">
    ${p.before&&!finished?`<p class="grover-context">${p.before}</p>`:''}
    ${caption?`<p class="grover-caption">${caption}</p>`:''}
-   ${groverLockCards(stage,revealed)}
-   ${p.o?`<div class="grover-prediction" role="group" aria-label="${p.phase==='recap'?L('选择你的理解','Choose what you think'):L('选择你的预测','Choose your prediction')}">${p.o.map((option,i)=>`<button type="button" class="ghost" data-grover-predict="${i}" aria-pressed="${prediction===i}"${answered?' disabled':''}>${option}</button>`).join('')}</div>`:''}
+   ${p.phase==='recap'?'':groverLockCards(stage,revealed)}
+   ${p.o?`<div class="opts grover-opts" role="group" aria-label="${p.phase==='recap'?L('选择你的理解','Choose what you think'):L('选择你的预测','Choose your prediction')}">${p.o.map((option,i)=>{const mark=finished&&(i===p.a||i===prediction)?(i===p.a?'<span class="mark ok" aria-hidden="true">✓</span>':'<span class="mark no" aria-hidden="true">✕</span>'):'';return `<div class="opt-item"><button type="button" class="opt${finished&&i===p.a?' right':finished&&i===prediction?' wrong':!finished&&i===prediction?' is-picked':''}" data-grover-predict="${i}"${answered?' disabled':''}>${mark}${option}</button></div>`}).join('')}</div>`:''}
+   ${finished&&p.o?`<p class="answer-verdict is-${prediction===p.a?'right':'wrong'}" role="status">${VERDICT_ICON[prediction===p.a?'right':'wrong']}<span>${prediction===p.a?L('答对了！','Correct!'):L('答错了，看看下面的解析。','Not right. See the explanation below.')}</span></p>`:''}
    <div class="grover-actions">${p.action?`<button type="button" class="primary" data-grover-action${acted||(p.o&&!answered)?' disabled':''}>${acted?L('已完成'+p.action,'Done: '+p.action):p.action}</button>`:''}${finished&&p.action?`<button type="button" class="ghost" data-grover-reset>${L('重试本步','Retry this step')}</button>`:''}</div>
-   <div class="grover-result" role="status" tabindex="-1">${finished?`${p.o?`<strong>${prediction===p.a?L('与你的判断一致。','That matches your prediction.'):L('看看实验告诉了我们什么。','Let’s see what the experiment tells us.')}</strong>`:''}<p>${p.after}</p>`:p.action&&answered?L('<p>预测已记录。点击“再做一轮”查看结果。</p>',`<p>Prediction saved. Click “${p.action}” to see the result.</p>`):''}</div>
-   ${p.detail&&(finished||p.phase==='task')?`<p class="grover-detail">${p.detail}</p>`:''}
+   <div class="grover-result" role="status" tabindex="-1">${finished?(p.o?`<div class="fb"><b>${L('本题解析','Explanation')}</b>${p.after}${p.detail?`<p class="grover-detail">${p.detail}</p>`:''}</div>`:`<p>${p.after}</p>`):p.action&&answered?L(`<p>预测已记录。点击“${p.action}”查看结果。</p>`,`<p>Prediction saved. Click “${p.action}” to see the result.</p>`):''}</div>
+   ${p.detail&&(p.phase==='task'||(finished&&!p.o))?`<p class="grover-detail">${p.detail}</p>`:''}
   </section>`;
   const ready=p.phase==='task'||finished;
   S.gateOK=ready;
@@ -2303,6 +2342,10 @@ function studioView(kind,m,p){
  if(probs)html+=`<p class="studio-label">${caption}</p>${studioBars(labels,probs,m.counts)}`;
  return {html,note,probs};
 }
+function studioSlider(id,label,options,value){
+ const index=Math.max(0,options.findIndex(([v])=>v===value));
+ return `<label class="studio-slider"><span class="studio-slider-head"><span>${label}</span><output>${options[index][1]}</output></span><input type="range" min="0" max="${options.length-1}" step="1" value="${index}" data-slider="${id}" aria-label="${label}"></label>`;
+}
 COMP.studio=(slot,p)=>{
  const key=S.lesson.id+':'+(p.key||S.i),controls=p.controls||STUDIO_CONTROLS[p.kind];
  const defaults=Object.fromEntries(controls.map(([id,,options])=>[id,options[0][0]]));
@@ -2310,12 +2353,18 @@ COMP.studio=(slot,p)=>{
  const remember=()=>{const signature=JSON.stringify(controls.map(([id])=>m[id]));if(!m.visited.includes(signature))m.visited.push(signature);m.observed.push(Object.fromEntries(controls.map(([id])=>[id,m[id]])));};
  function draw(){
   const view=studioView(p.kind,m,p),canSample=view.probs&&p.kind!=='protection'&&p.sample!==false;
-  slot.innerHTML=`<section class="studio${p.kind==='compile'?' studio-compile':''}" aria-label="${L('互动实验','Interactive experiment')}"><div class="studio-controls">${controls.map(([id,label,options])=>p.buttons?`<fieldset class="studio-options"><legend>${label}</legend>${options.map(([v,text])=>`<button type="button" data-choice="${id}" data-value="${v}" aria-pressed="${m[id]===v}">${text}</button>`).join('')}</fieldset>`:`<label class="studio-setting"><span>${label}</span><select data-control="${id}" aria-label="${label}">${options.map(([v,text])=>`<option value="${v}"${m[id]===v?' selected':''}>${text}</option>`).join('')}</select></label>`).join('')}</div><div class="studio-output" aria-live="polite">${view.html}<p class="studio-note">${view.note}</p></div>${canSample?`<button type="button" class="secondary" data-studio-run>${L(`重新准备并模拟 ${m.shots||128} 次`,`Re-prepare and simulate ${m.shots||128} shots`)}</button><p class="cap">${m.counts?L('改变条件后需重新采样。','Sample again after changing settings.'):L('计数来自模拟采样。','Counts come from simulated sampling.')}</p>`:''}</section>`;
+  slot.innerHTML=`<section class="studio${p.kind==='compile'?' studio-compile':''}" aria-label="${L('互动实验','Interactive experiment')}"><div class="studio-controls">${controls.map(([id,label,options,kind])=>kind?.slider?studioSlider(id,label,options,m[id]):p.buttons?`<fieldset class="studio-options"><legend>${label}</legend>${options.map(([v,text])=>`<button type="button" data-choice="${id}" data-value="${v}" aria-pressed="${m[id]===v}">${text}</button>`).join('')}</fieldset>`:`<label class="studio-setting"><span>${label}</span><select data-control="${id}" aria-label="${label}">${options.map(([v,text])=>`<option value="${v}"${m[id]===v?' selected':''}>${text}</option>`).join('')}</select></label>`).join('')}</div><div class="studio-output" aria-live="polite">${view.html}<p class="studio-note">${view.note}</p></div>${canSample?`<button type="button" class="secondary" data-studio-run>${L(`重新准备并模拟 ${m.shots||128} 次`,`Re-prepare and simulate ${m.shots||128} shots`)}</button>`:''}</section>`;
   slot.querySelectorAll('[data-choice]').forEach(button=>button.onclick=()=>{
    const id=button.dataset.choice,options=controls.find(c=>c[0]===id)[2];
    m[id]=options.find(([v])=>String(v)===button.dataset.value)[0];
    m.counts=null;remember();draw();
    slot.querySelector(`[data-choice="${id}"][data-value="${button.dataset.value}"]`)?.focus({preventScroll:true});
+  });
+  slot.querySelectorAll('[data-slider]').forEach(input=>{
+   const id=input.dataset.slider,options=controls.find(c=>c[0]===id)[2];
+   const show=()=>{const [v,text]=options[+input.value];input.closest('.studio-slider').querySelector('output').textContent=text;const run=slot.querySelector('[data-studio-run]');if(run&&id==='shots')run.textContent=L(`重新准备并模拟 ${v} 次`,`Re-prepare and simulate ${v} shots`);};
+   input.oninput=show;
+   input.onchange=()=>{m[id]=options[+input.value][0];m.counts=null;remember();draw();slot.querySelector(`[data-slider="${id}"]`)?.focus({preventScroll:true});};
   });
   slot.querySelectorAll('[data-control]').forEach(control=>control.onchange=()=>{
    const id=control.dataset.control,options=controls.find(c=>c[0]===id)[2];
@@ -2326,7 +2375,8 @@ COMP.studio=(slot,p)=>{
   slot.querySelector('[data-studio-run]')?.addEventListener('click',()=>{m.counts=labSample(view.probs,m.shots||128);m.runs++;remember();draw();slot.querySelector('[data-studio-run]')?.focus({preventScroll:true});});
   typesetMath(slot);
   slot.querySelectorAll('.lab-node').forEach(b=>b.disabled=true);
-  const observed=(p.observe||[]).filter(rule=>m.observed.some(state=>Object.entries(rule).every(([k,v])=>state[k]===v))).length;
+  // A rule value may be [min, max] to accept any slider position in that range.
+  const observed=(p.observe||[]).filter(rule=>m.observed.some(state=>Object.entries(rule).every(([k,v])=>Array.isArray(v)?state[k]>=v[0]&&state[k]<=v[1]:state[k]===v))).length;
   const ready=(!p.sample||m.runs>0)&&observed===(p.observe||[]).length&&m.visited.length>=(p.minSettings||0);
   if(!ready){
    const remaining=[];
@@ -2339,7 +2389,17 @@ COMP.studio=(slot,p)=>{
  }
  remember();draw();
 };
-ART.compileDevices=()=>`<section class="studio-compile compile-devices" aria-label="${L('两种设备实现同一个 CNOT','Two devices carry out the same CNOT')}"><p class="compile-context">${L('我们要完成的操作：用 q0 控制，对 q1 做 CNOT。','The operation we want: a CNOT with q0 as control and q1 as target.')}</p><div class="compile-circuits"><div><h3>${L('设备支持 CNOT','Device supports CNOT')}</h3><div class="lab-circuit compile-fatqat"><img src="assets/circuits/fatqat-cnot.svg" alt="${L('FatQat 线路图：上方 q0 为控制位，下方 q1 为目标位，执行一个 CNOT。','FatQat circuit: q0 on top is the control, q1 below is the target, and one CNOT is applied.')}"></div><p>${L('直接执行 1 个 CNOT。','Run 1 CNOT directly.')}</p></div><div><h3>${L('设备支持 H 和 CZ','Device supports H and CZ')}</h3><div class="lab-circuit compile-fatqat"><img src="assets/circuits/fatqat-h-cz-h.svg" alt="${L('FatQat 线路图：在下方 q1 上执行 H，然后在 q0、q1 之间执行 CZ，最后在 q1 上执行 H。','FatQat circuit: H on q1 (bottom), then CZ between q0 and q1, then H on q1 again.')}"></div><p>${L('在 q1 上先做 H，再做 CZ，最后再在 q1 上做 H。','Apply H on q1, then CZ, then H on q1 again.')}</p></div></div></section>`;
+// FatQat circuit drawings, inlined so they appear with the page instead of after one more request.
+const COMPILE_CIRCUIT_SRC={cnot:'data:image/svg+xml;base64,PHN2ZyB4bWxuczp4bGluaz0iaHR0cDovL3d3dy53My5vcmcvMTk5OS94bGluayIgd2lkdGg9Ijg3LjE4NTQ1NXB0IiBoZWlnaHQ9IjY2LjI0cHQiIHZpZXdCb3g9IjAgMCA4Ny4xODU0NTUgNjYuMjQiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIgdmVyc2lvbj0iMS4xIj48ZGVmcz48c3R5bGUgdHlwZT0idGV4dC9jc3MiPip7c3Ryb2tlLWxpbmVqb2luOiByb3VuZDsgc3Ryb2tlLWxpbmVjYXA6IGJ1dHR9PC9zdHlsZT48L2RlZnM+PGcgaWQ9ImZpZ3VyZV8xIj48ZyBpZD0icGF0Y2hfMSI+PHBhdGggZD0iTSAwIDY2LjI0IApMIDg3LjE4NTQ1NSA2Ni4yNCAKTCA4Ny4xODU0NTUgMCAKTCAwIDAgCkwgMCA2Ni4yNCAKegoiIHN0eWxlPSJmaWxsOiBub25lIi8+PC9nPjxnIGlkPSJheGVzXzEiPjxnIGlkPSJ0ZXh0XzEiPjxnIGNsaXAtcGF0aD0idXJsKCNwYjUxZDExOTJiYykiPjxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDE3LjMwNzI3MyAyMi42MjY3NDcpIHNjYWxlKDAuMSAtMC4xKSI+PGRlZnM+PHBhdGggaWQ9IkRlamFWdVNhbnMtT2JsaXF1ZS01NCIgZD0iTSAyNjY5IDUyNSAKUSAyNDM4IDIyMiAyMTIzIDY1IApRIDE4MDkgLTkxIDE0MjggLTkxIApRIDg5NyAtOTEgNTk1IDI2NyAKUSAyOTQgNjI1IDI5NCAxMjUzIApRIDI5NCAxNzU5IDQ4MCAyMjMxIApRIDY2NiAyNzAzIDEwMTMgMzA3OCAKUSAxMjM4IDMzMjIgMTUzMCAzNDUzIApRIDE4MjIgMzU4NCAyMTQ0IDM1ODQgClEgMjUzMSAzNTg0IDI3ODEgMzQzMSAKUSAzMDMxIDMyNzggMzE0NCAyOTY5IApMIDMyNDQgMzQ5NCAKTCAzODIyIDM0OTQgCkwgMjg4OCAtMTMxOSAKTCAyMzA5IC0xMzE5IApMIDI2NjkgNTI1IAp6Ck0gODkxIDEzMzggClEgODkxIDg3NSAxMDg0IDYzMyAKUSAxMjc4IDM5MSAxNjQ0IDM5MSAKUSAyMTg4IDM5MSAyNTcyIDkxMSAKUSAyOTU2IDE0MzEgMjk1NiAyMTc1IApRIDI5NTYgMjYyNSAyNzU3IDI4NjQgClEgMjU1OSAzMTAzIDIxODggMzEwMyAKUSAxOTE2IDMxMDMgMTY4NCAyOTc2IApRIDE0NTMgMjg1MCAxMjgxIDI2MDYgClEgMTEwMCAyMzUwIDk5NSAyMDA2IApRIDg5MSAxNjYzIDg5MSAxMzM4IAp6CiIgdHJhbnNmb3JtPSJzY2FsZSgwLjAxNTYyNSkiLz48cGF0aCBpZD0iRGVqYVZ1U2Fucy0xMyIgZD0iTSAyMDM0IDQyNTAgClEgMTU0NyA0MjUwIDEzMDEgMzc3MCAKUSAxMDU2IDMyOTEgMTA1NiAyMzI4IApRIDEwNTYgMTM2OSAxMzAxIDg4OSAKUSAxNTQ3IDQwOSAyMDM0IDQwOSAKUSAyNTI1IDQwOSAyNzcwIDg4OSAKUSAzMDE2IDEzNjkgMzAxNiAyMzI4IApRIDMwMTYgMzI5MSAyNzcwIDM3NzAgClEgMjUyNSA0MjUwIDIwMzQgNDI1MCAKegpNIDIwMzQgNDc1MCAKUSAyODE5IDQ3NTAgMzIzMyA0MTI5IApRIDM2NDcgMzUwOSAzNjQ3IDIzMjggClEgMzY0NyAxMTUwIDMyMzMgNTI5IApRIDI4MTkgLTkxIDIwMzQgLTkxIApRIDEyNTAgLTkxIDgzNiA1MjkgClEgNDIyIDExNTAgNDIyIDIzMjggClEgNDIyIDM1MDkgODM2IDQxMjkgClEgMTI1MCA0NzUwIDIwMzQgNDc1MCAKegoiIHRyYW5zZm9ybT0ic2NhbGUoMC4wMTU2MjUpIi8+PC9kZWZzPjx1c2UgeGxpbms6aHJlZj0iI0RlamFWdVNhbnMtT2JsaXF1ZS01NCIvPjx1c2UgeGxpbms6aHJlZj0iI0RlamFWdVNhbnMtMTMiIHRyYW5zZm9ybT0idHJhbnNsYXRlKDYzLjQ3NjU2MiAtMTQuOTk5OTUxKSBzY2FsZSgwLjcpIi8+PC9nPjwvZz48L2c+PGcgaWQ9InRleHRfMiI+PGcgY2xpcC1wYXRoPSJ1cmwoI3BiNTFkMTE5MmJjKSI+PGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTcuMzA3MjczIDQ4LjgwODU2NSkgc2NhbGUoMC4xIC0wLjEpIj48ZGVmcz48cGF0aCBpZD0iRGVqYVZ1U2Fucy0xNCIgZD0iTSA3OTQgNTMxIApMIDE4MjUgNTMxIApMIDE4MjUgNDA5MSAKTCA3MDMgMzg2NiAKTCA3MDMgNDQ0MSAKTCAxODE5IDQ2NjYgCkwgMjQ1MCA0NjY2IApMIDI0NTAgNTMxIApMIDM0ODEgNTMxIApMIDM0ODEgMCAKTCA3OTQgMCAKTCA3OTQgNTMxIAp6CiIgdHJhbnNmb3JtPSJzY2FsZSgwLjAxNTYyNSkiLz48L2RlZnM+PHVzZSB4bGluazpocmVmPSIjRGVqYVZ1U2Fucy1PYmxpcXVlLTU0Ii8+PHVzZSB4bGluazpocmVmPSIjRGVqYVZ1U2Fucy0xNCIgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNjMuNDc2NTYyIC0xNC45OTk5NTEpIHNjYWxlKDAuNykiLz48L2c+PC9nPjwvZz48ZyBpZD0ibGluZTJkXzEiPjxwYXRoIGQ9Ik0gMzMuNjQzNjM2IDIwLjAyOTA5MSAKTCA2Ny4xNTYzNjQgMjAuMDI5MDkxIAoiIGNsaXAtcGF0aD0idXJsKCNwYjUxZDExOTJiYykiIHN0eWxlPSJmaWxsOiBub25lOyBzdHJva2U6ICMwMDAwMDA7IHN0cm9rZS13aWR0aDogMS4xOyBzdHJva2UtbGluZWNhcDogc3F1YXJlIi8+PC9nPjxnIGlkPSJsaW5lMmRfMiI+PHBhdGggZD0iTSAzMy42NDM2MzYgNDYuMjEwOTA5IApMIDY3LjE1NjM2NCA0Ni4yMTA5MDkgCiIgY2xpcC1wYXRoPSJ1cmwoI3BiNTFkMTE5MmJjKSIgc3R5bGU9ImZpbGw6IG5vbmU7IHN0cm9rZTogIzAwMDAwMDsgc3Ryb2tlLXdpZHRoOiAxLjE7IHN0cm9rZS1saW5lY2FwOiBzcXVhcmUiLz48L2c+PGcgaWQ9InBhdGNoXzIiPjxwYXRoIGQ9Ik0gNDkuMzUyNzI3IDE3LjQxMDkwOSAKQyA1MC4wNDcwNzcgMTcuNDEwOTA5IDUwLjcxMzA4MiAxNy42ODY3NzcgNTEuMjA0MDYxIDE4LjE3Nzc1NyAKQyA1MS42OTUwNDEgMTguNjY4NzM2IDUxLjk3MDkwOSAxOS4zMzQ3NDEgNTEuOTcwOTA5IDIwLjAyOTA5MSAKQyA1MS45NzA5MDkgMjAuNzIzNDQxIDUxLjY5NTA0MSAyMS4zODk0NDUgNTEuMjA0MDYxIDIxLjg4MDQyNSAKQyA1MC43MTMwODIgMjIuMzcxNDA1IDUwLjA0NzA3NyAyMi42NDcyNzMgNDkuMzUyNzI3IDIyLjY0NzI3MyAKQyA0OC42NTgzNzcgMjIuNjQ3MjczIDQ3Ljk5MjM3MyAyMi4zNzE0MDUgNDcuNTAxMzkzIDIxLjg4MDQyNSAKQyA0Ny4wMTA0MTQgMjEuMzg5NDQ1IDQ2LjczNDU0NSAyMC43MjM0NDEgNDYuNzM0NTQ1IDIwLjAyOTA5MSAKQyA0Ni43MzQ1NDUgMTkuMzM0NzQxIDQ3LjAxMDQxNCAxOC42Njg3MzYgNDcuNTAxMzkzIDE4LjE3Nzc1NyAKQyA0Ny45OTIzNzMgMTcuNjg2Nzc3IDQ4LjY1ODM3NyAxNy40MTA5MDkgNDkuMzUyNzI3IDE3LjQxMDkwOSAKegoiIGNsaXAtcGF0aD0idXJsKCNwYjUxZDExOTJiYykiIHN0eWxlPSJmaWxsOiAjYmJjOGZmOyBzdHJva2U6ICNiYmM4ZmY7IHN0cm9rZS1saW5lam9pbjogbWl0ZXIiLz48L2c+PGcgaWQ9InBhdGNoXzMiPjxwYXRoIGQ9Ik0gNDkuMzUyNzI3IDM5LjkyNzI3MyAKQyA1MS4wMTkxNjcgMzkuOTI3MjczIDUyLjYxNzU3OCA0MC41ODkzNTYgNTMuNzk1OTI5IDQxLjc2NzcwNyAKQyA1NC45NzQyOCA0Mi45NDYwNTggNTUuNjM2MzY0IDQ0LjU0NDQ2OSA1NS42MzYzNjQgNDYuMjEwOTA5IApDIDU1LjYzNjM2NCA0Ny44NzczNDkgNTQuOTc0MjggNDkuNDc1NzYgNTMuNzk1OTI5IDUwLjY1NDExMSAKQyA1Mi42MTc1NzggNTEuODMyNDYyIDUxLjAxOTE2NyA1Mi40OTQ1NDUgNDkuMzUyNzI3IDUyLjQ5NDU0NSAKQyA0Ny42ODYyODcgNTIuNDk0NTQ1IDQ2LjA4Nzg3NiA1MS44MzI0NjIgNDQuOTA5NTI1IDUwLjY1NDExMSAKQyA0My43MzExNzQgNDkuNDc1NzYgNDMuMDY5MDkxIDQ3Ljg3NzM0OSA0My4wNjkwOTEgNDYuMjEwOTA5IApDIDQzLjA2OTA5MSA0NC41NDQ0NjkgNDMuNzMxMTc0IDQyLjk0NjA1OCA0NC45MDk1MjUgNDEuNzY3NzA3IApDIDQ2LjA4Nzg3NiA0MC41ODkzNTYgNDcuNjg2Mjg3IDM5LjkyNzI3MyA0OS4zNTI3MjcgMzkuOTI3MjczIAp6CiIgY2xpcC1wYXRoPSJ1cmwoI3BiNTFkMTE5MmJjKSIgc3R5bGU9ImZpbGw6ICNiYmM4ZmY7IHN0cm9rZTogI2JiYzhmZjsgc3Ryb2tlLWxpbmVqb2luOiBtaXRlciIvPjwvZz48ZyBpZD0ibGluZTJkXzMiPjxwYXRoIGQ9Ik0gNDkuMzUyNzI3IDQ2LjIxMDkwOSAKTCA0OS4zNTI3MjcgMjAuMDI5MDkxIAoiIGNsaXAtcGF0aD0idXJsKCNwYjUxZDExOTJiYykiIHN0eWxlPSJmaWxsOiBub25lOyBzdHJva2U6ICNiYmM4ZmY7IHN0cm9rZS13aWR0aDogMS41OyBzdHJva2UtbGluZWNhcDogc3F1YXJlIi8+PC9nPjxnIGlkPSJsaW5lMmRfNCI+PHBhdGggZD0iTSA0OS4zNTI3MjcgNDMuMDY5MDkxIApMIDQ5LjM1MjcyNyA0OS4zNTI3MjcgCiIgY2xpcC1wYXRoPSJ1cmwoI3BiNTFkMTE5MmJjKSIgc3R5bGU9ImZpbGw6IG5vbmU7IHN0cm9rZTogIzAwMDAwMDsgc3Ryb2tlLXdpZHRoOiAxLjU7IHN0cm9rZS1saW5lY2FwOiBzcXVhcmUiLz48L2c+PGcgaWQ9ImxpbmUyZF81Ij48cGF0aCBkPSJNIDQ2LjIxMDkwOSA0Ni4yMTA5MDkgCkwgNTIuNDk0NTQ1IDQ2LjIxMDkwOSAKIiBjbGlwLXBhdGg9InVybCgjcGI1MWQxMTkyYmMpIiBzdHlsZT0iZmlsbDogbm9uZTsgc3Ryb2tlOiAjMDAwMDAwOyBzdHJva2Utd2lkdGg6IDEuNTsgc3Ryb2tlLWxpbmVjYXA6IHNxdWFyZSIvPjwvZz48L2c+PC9nPjxkZWZzPjxjbGlwUGF0aCBpZD0icGI1MWQxMTkyYmMiPjxyZWN0IHg9IjQuMzIiIHk9IjQuMzIiIHdpZHRoPSI3OC41NDU0NTUiIGhlaWdodD0iNTcuNiIvPjwvY2xpcFBhdGg+PC9kZWZzPjwvc3ZnPg==',hczh:'data:image/svg+xml;base64,PHN2ZyB4bWxuczp4bGluaz0iaHR0cDovL3d3dy53My5vcmcvMTk5OS94bGluayIgd2lkdGg9IjE0Ni41MzA5MDlwdCIgaGVpZ2h0PSI2Ni4yNHB0IiB2aWV3Qm94PSIwIDAgMTQ2LjUzMDkwOSA2Ni4yNCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB2ZXJzaW9uPSIxLjEiPjxkZWZzPjxzdHlsZSB0eXBlPSJ0ZXh0L2NzcyI+KntzdHJva2UtbGluZWpvaW46IHJvdW5kOyBzdHJva2UtbGluZWNhcDogYnV0dH08L3N0eWxlPjwvZGVmcz48ZyBpZD0iZmlndXJlXzEiPjxnIGlkPSJwYXRjaF8xIj48cGF0aCBkPSJNIDAgNjYuMjQgCkwgMTQ2LjUzMDkwOSA2Ni4yNCAKTCAxNDYuNTMwOTA5IDAgCkwgMCAwIApMIDAgNjYuMjQgCnoKIiBzdHlsZT0iZmlsbDogbm9uZSIvPjwvZz48ZyBpZD0iYXhlc18xIj48ZyBpZD0idGV4dF8xIj48ZyBjbGlwLXBhdGg9InVybCgjcGZlYzI2Y2M2Y2YpIj48ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxNy4zMDcyNzMgMjIuNjI2NzQ3KSBzY2FsZSgwLjEgLTAuMSkiPjxkZWZzPjxwYXRoIGlkPSJEZWphVnVTYW5zLU9ibGlxdWUtNTQiIGQ9Ik0gMjY2OSA1MjUgClEgMjQzOCAyMjIgMjEyMyA2NSAKUSAxODA5IC05MSAxNDI4IC05MSAKUSA4OTcgLTkxIDU5NSAyNjcgClEgMjk0IDYyNSAyOTQgMTI1MyAKUSAyOTQgMTc1OSA0ODAgMjIzMSAKUSA2NjYgMjcwMyAxMDEzIDMwNzggClEgMTIzOCAzMzIyIDE1MzAgMzQ1MyAKUSAxODIyIDM1ODQgMjE0NCAzNTg0IApRIDI1MzEgMzU4NCAyNzgxIDM0MzEgClEgMzAzMSAzMjc4IDMxNDQgMjk2OSAKTCAzMjQ0IDM0OTQgCkwgMzgyMiAzNDk0IApMIDI4ODggLTEzMTkgCkwgMjMwOSAtMTMxOSAKTCAyNjY5IDUyNSAKegpNIDg5MSAxMzM4IApRIDg5MSA4NzUgMTA4NCA2MzMgClEgMTI3OCAzOTEgMTY0NCAzOTEgClEgMjE4OCAzOTEgMjU3MiA5MTEgClEgMjk1NiAxNDMxIDI5NTYgMjE3NSAKUSAyOTU2IDI2MjUgMjc1NyAyODY0IApRIDI1NTkgMzEwMyAyMTg4IDMxMDMgClEgMTkxNiAzMTAzIDE2ODQgMjk3NiAKUSAxNDUzIDI4NTAgMTI4MSAyNjA2IApRIDExMDAgMjM1MCA5OTUgMjAwNiAKUSA4OTEgMTY2MyA4OTEgMTMzOCAKegoiIHRyYW5zZm9ybT0ic2NhbGUoMC4wMTU2MjUpIi8+PHBhdGggaWQ9IkRlamFWdVNhbnMtMTMiIGQ9Ik0gMjAzNCA0MjUwIApRIDE1NDcgNDI1MCAxMzAxIDM3NzAgClEgMTA1NiAzMjkxIDEwNTYgMjMyOCAKUSAxMDU2IDEzNjkgMTMwMSA4ODkgClEgMTU0NyA0MDkgMjAzNCA0MDkgClEgMjUyNSA0MDkgMjc3MCA4ODkgClEgMzAxNiAxMzY5IDMwMTYgMjMyOCAKUSAzMDE2IDMyOTEgMjc3MCAzNzcwIApRIDI1MjUgNDI1MCAyMDM0IDQyNTAgCnoKTSAyMDM0IDQ3NTAgClEgMjgxOSA0NzUwIDMyMzMgNDEyOSAKUSAzNjQ3IDM1MDkgMzY0NyAyMzI4IApRIDM2NDcgMTE1MCAzMjMzIDUyOSAKUSAyODE5IC05MSAyMDM0IC05MSAKUSAxMjUwIC05MSA4MzYgNTI5IApRIDQyMiAxMTUwIDQyMiAyMzI4IApRIDQyMiAzNTA5IDgzNiA0MTI5IApRIDEyNTAgNDc1MCAyMDM0IDQ3NTAgCnoKIiB0cmFuc2Zvcm09InNjYWxlKDAuMDE1NjI1KSIvPjwvZGVmcz48dXNlIHhsaW5rOmhyZWY9IiNEZWphVnVTYW5zLU9ibGlxdWUtNTQiLz48dXNlIHhsaW5rOmhyZWY9IiNEZWphVnVTYW5zLTEzIiB0cmFuc2Zvcm09InRyYW5zbGF0ZSg2My40NzY1NjIgLTE0Ljk5OTk1MSkgc2NhbGUoMC43KSIvPjwvZz48L2c+PC9nPjxnIGlkPSJ0ZXh0XzIiPjxnIGNsaXAtcGF0aD0idXJsKCNwZmVjMjZjYzZjZikiPjxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDE3LjMwNzI3MyA0OC44MDg1NjUpIHNjYWxlKDAuMSAtMC4xKSI+PGRlZnM+PHBhdGggaWQ9IkRlamFWdVNhbnMtMTQiIGQ9Ik0gNzk0IDUzMSAKTCAxODI1IDUzMSAKTCAxODI1IDQwOTEgCkwgNzAzIDM4NjYgCkwgNzAzIDQ0NDEgCkwgMTgxOSA0NjY2IApMIDI0NTAgNDY2NiAKTCAyNDUwIDUzMSAKTCAzNDgxIDUzMSAKTCAzNDgxIDAgCkwgNzk0IDAgCkwgNzk0IDUzMSAKegoiIHRyYW5zZm9ybT0ic2NhbGUoMC4wMTU2MjUpIi8+PC9kZWZzPjx1c2UgeGxpbms6aHJlZj0iI0RlamFWdVNhbnMtT2JsaXF1ZS01NCIvPjx1c2UgeGxpbms6aHJlZj0iI0RlamFWdVNhbnMtMTQiIHRyYW5zZm9ybT0idHJhbnNsYXRlKDYzLjQ3NjU2MiAtMTQuOTk5OTUxKSBzY2FsZSgwLjcpIi8+PC9nPjwvZz48L2c+PGcgaWQ9ImxpbmUyZF8xIj48cGF0aCBkPSJNIDMzLjY0MzYzNiAyMC4wMjkwOTEgCkwgMTI2LjUwMTgxOCAyMC4wMjkwOTEgCiIgY2xpcC1wYXRoPSJ1cmwoI3BmZWMyNmNjNmNmKSIgc3R5bGU9ImZpbGw6IG5vbmU7IHN0cm9rZTogIzAwMDAwMDsgc3Ryb2tlLXdpZHRoOiAxLjE7IHN0cm9rZS1saW5lY2FwOiBzcXVhcmUiLz48L2c+PGcgaWQ9ImxpbmUyZF8yIj48cGF0aCBkPSJNIDMzLjY0MzYzNiA0Ni4yMTA5MDkgCkwgMTI2LjUwMTgxOCA0Ni4yMTA5MDkgCiIgY2xpcC1wYXRoPSJ1cmwoI3BmZWMyNmNjNmNmKSIgc3R5bGU9ImZpbGw6IG5vbmU7IHN0cm9rZTogIzAwMDAwMDsgc3Ryb2tlLXdpZHRoOiAxLjE7IHN0cm9rZS1saW5lY2FwOiBzcXVhcmUiLz48L2c+PGcgaWQ9InBhdGNoXzIiPjxwYXRoIGQ9Ik0gNDQuMzc4MTgyIDM4LjYxODE4MiAKQyA0Ni43MzQ1NDUgMzYuMjYxODE4IDU3LjIwNzI3MyAzNi4yNjE4MTggNTkuNTYzNjM2IDM4LjYxODE4MiAKQyA2MS45MiA0MC45NzQ1NDUgNjEuOTIgNTEuNDQ3MjczIDU5LjU2MzYzNiA1My44MDM2MzYgCkMgNTcuMjA3MjczIDU2LjE2IDQ2LjczNDU0NSA1Ni4xNiA0NC4zNzgxODIgNTMuODAzNjM2IApDIDQyLjAyMTgxOCA1MS40NDcyNzMgNDIuMDIxODE4IDQwLjk3NDU0NSA0NC4zNzgxODIgMzguNjE4MTgyIAp6CiIgY2xpcC1wYXRoPSJ1cmwoI3BmZWMyNmNjNmNmKSIgc3R5bGU9ImZpbGw6ICNiYmM4ZmY7IHN0cm9rZTogIzAwMDAwMDsgc3Ryb2tlLWxpbmVqb2luOiBtaXRlciIvPjwvZz48ZyBpZD0icGF0Y2hfMyI+PHBhdGggZD0iTSA4MC4wNzI3MjcgMTcuNDEwOTA5IApDIDgwLjc2NzA3NyAxNy40MTA5MDkgODEuNDMzMDgyIDE3LjY4Njc3NyA4MS45MjQwNjEgMTguMTc3NzU3IApDIDgyLjQxNTA0MSAxOC42Njg3MzYgODIuNjkwOTA5IDE5LjMzNDc0MSA4Mi42OTA5MDkgMjAuMDI5MDkxIApDIDgyLjY5MDkwOSAyMC43MjM0NDEgODIuNDE1MDQxIDIxLjM4OTQ0NSA4MS45MjQwNjEgMjEuODgwNDI1IApDIDgxLjQzMzA4MiAyMi4zNzE0MDUgODAuNzY3MDc3IDIyLjY0NzI3MyA4MC4wNzI3MjcgMjIuNjQ3MjczIApDIDc5LjM3ODM3NyAyMi42NDcyNzMgNzguNzEyMzczIDIyLjM3MTQwNSA3OC4yMjEzOTMgMjEuODgwNDI1IApDIDc3LjczMDQxNCAyMS4zODk0NDUgNzcuNDU0NTQ1IDIwLjcyMzQ0MSA3Ny40NTQ1NDUgMjAuMDI5MDkxIApDIDc3LjQ1NDU0NSAxOS4zMzQ3NDEgNzcuNzMwNDE0IDE4LjY2ODczNiA3OC4yMjEzOTMgMTguMTc3NzU3IApDIDc4LjcxMjM3MyAxNy42ODY3NzcgNzkuMzc4Mzc3IDE3LjQxMDkwOSA4MC4wNzI3MjcgMTcuNDEwOTA5IAp6CiIgY2xpcC1wYXRoPSJ1cmwoI3BmZWMyNmNjNmNmKSIgc3R5bGU9ImZpbGw6ICNhNmNlYzg7IHN0cm9rZTogI2E2Y2VjODsgc3Ryb2tlLWxpbmVqb2luOiBtaXRlciIvPjwvZz48ZyBpZD0ibGluZTJkXzMiPjxwYXRoIGQ9Ik0gODAuMDcyNzI3IDIwLjAyOTA5MSAKTCA4MC4wNzI3MjcgNDYuMjEwOTA5IAoiIGNsaXAtcGF0aD0idXJsKCNwZmVjMjZjYzZjZikiIHN0eWxlPSJmaWxsOiBub25lOyBzdHJva2U6ICNhNmNlYzg7IHN0cm9rZS13aWR0aDogMS41OyBzdHJva2UtbGluZWNhcDogc3F1YXJlIi8+PC9nPjxnIGlkPSJwYXRjaF80Ij48cGF0aCBkPSJNIDcwLjU2IDM4LjYxODE4MiAKQyA3Mi45MTYzNjQgMzYuMjYxODE4IDg3LjIyOTA5MSAzNi4yNjE4MTggODkuNTg1NDU1IDM4LjYxODE4MiAKQyA5MS45NDE4MTggNDAuOTc0NTQ1IDkxLjk0MTgxOCA1MS40NDcyNzMgODkuNTg1NDU1IDUzLjgwMzYzNiAKQyA4Ny4yMjkwOTEgNTYuMTYgNzIuOTE2MzY0IDU2LjE2IDcwLjU2IDUzLjgwMzYzNiAKQyA2OC4yMDM2MzYgNTEuNDQ3MjczIDY4LjIwMzYzNiA0MC45NzQ1NDUgNzAuNTYgMzguNjE4MTgyIAp6CiIgY2xpcC1wYXRoPSJ1cmwoI3BmZWMyNmNjNmNmKSIgc3R5bGU9ImZpbGw6ICNhNmNlYzg7IHN0cm9rZTogIzAwMDAwMDsgc3Ryb2tlLWxpbmVqb2luOiBtaXRlciIvPjwvZz48ZyBpZD0icGF0Y2hfNSI+PHBhdGggZD0iTSAxMDAuNTgxODE4IDM4LjYxODE4MiAKQyAxMDIuOTM4MTgyIDM2LjI2MTgxOCAxMTMuNDEwOTA5IDM2LjI2MTgxOCAxMTUuNzY3MjczIDM4LjYxODE4MiAKQyAxMTguMTIzNjM2IDQwLjk3NDU0NSAxMTguMTIzNjM2IDUxLjQ0NzI3MyAxMTUuNzY3MjczIDUzLjgwMzYzNiAKQyAxMTMuNDEwOTA5IDU2LjE2IDEwMi45MzgxODIgNTYuMTYgMTAwLjU4MTgxOCA1My44MDM2MzYgCkMgOTguMjI1NDU1IDUxLjQ0NzI3MyA5OC4yMjU0NTUgNDAuOTc0NTQ1IDEwMC41ODE4MTggMzguNjE4MTgyIAp6CiIgY2xpcC1wYXRoPSJ1cmwoI3BmZWMyNmNjNmNmKSIgc3R5bGU9ImZpbGw6ICNiYmM4ZmY7IHN0cm9rZTogIzAwMDAwMDsgc3Ryb2tlLWxpbmVqb2luOiBtaXRlciIvPjwvZz48ZyBpZD0idGV4dF8zIj48ZyBjbGlwLXBhdGg9InVybCgjcGZlYzI2Y2M2Y2YpIj48ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg0OC45NjA3NTMgNDguODA4NTY1KSBzY2FsZSgwLjEgLTAuMSkiPjxkZWZzPjxwYXRoIGlkPSJEZWphVnVTYW5zTW9uby0yYiIgZD0iTSA0MjggNDY2NiAKTCAxMDYzIDQ2NjYgCkwgMTA2MyAyNzUzIApMIDI3OTEgMjc1MyAKTCAyNzkxIDQ2NjYgCkwgMzQyNSA0NjY2IApMIDM0MjUgMCAKTCAyNzkxIDAgCkwgMjc5MSAyMjIyIApMIDEwNjMgMjIyMiAKTCAxMDYzIDAgCkwgNDI4IDAgCkwgNDI4IDQ2NjYgCnoKIiB0cmFuc2Zvcm09InNjYWxlKDAuMDE1NjI1KSIvPjwvZGVmcz48dXNlIHhsaW5rOmhyZWY9IiNEZWphVnVTYW5zTW9uby0yYiIvPjwvZz48L2c+PC9nPjxnIGlkPSJ0ZXh0XzQiPjxnIGNsaXAtcGF0aD0idXJsKCNwZmVjMjZjYzZjZikiPjxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDc0LjA1MjQxNSA0OC44MDg1NjUpIHNjYWxlKDAuMSAtMC4xKSI+PGRlZnM+PHBhdGggaWQ9IkRlamFWdVNhbnNNb25vLTI2IiBkPSJNIDMzNTMgMTY2IApRIDMxMTMgMzggMjg1OSAtMjYgClEgMjYwNiAtOTEgMjMyMiAtOTEgClEgMTQyNSAtOTEgOTI5IDU0MyAKUSA0MzQgMTE3OCA0MzQgMjMyOCAKUSA0MzQgMzQ3MiA5MzIgNDExMSAKUSAxNDMxIDQ3NTAgMjMyMiA0NzUwIApRIDI2MDYgNDc1MCAyODU5IDQ2ODYgClEgMzExMyA0NjIyIDMzNTMgNDQ5NCAKTCAzMzUzIDM4NDcgClEgMzEyMiA0MDM4IDI4NTYgNDEzOCAKUSAyNTkxIDQyMzggMjMyMiA0MjM4IApRIDE3MDYgNDIzOCAxNDAwIDM3NjMgClEgMTA5NCAzMjg4IDEwOTQgMjMyOCAKUSAxMDk0IDEzNzIgMTQwMCA4OTcgClEgMTcwNiA0MjIgMjMyMiA0MjIgClEgMjU5NyA0MjIgMjg2MSA1MjIgClEgMzEyNSA2MjIgMzM1MyA4MTMgCkwgMzM1MyAxNjYgCnoKIiB0cmFuc2Zvcm09InNjYWxlKDAuMDE1NjI1KSIvPjxwYXRoIGlkPSJEZWphVnVTYW5zTW9uby0zZCIgZD0iTSA1NTYgNDY2NiAKTCAzNTg0IDQ2NjYgCkwgMzU4NCA0MTg0IApMIDExNDcgNTMxIApMIDM2NTMgNTMxIApMIDM2NTMgMCAKTCA0ODggMCAKTCA0ODggNDgxIApMIDI4NTkgNDEzNCAKTCA1NTYgNDEzNCAKTCA1NTYgNDY2NiAKegoiIHRyYW5zZm9ybT0ic2NhbGUoMC4wMTU2MjUpIi8+PC9kZWZzPjx1c2UgeGxpbms6aHJlZj0iI0RlamFWdVNhbnNNb25vLTI2Ii8+PHVzZSB4bGluazpocmVmPSIjRGVqYVZ1U2Fuc01vbm8tM2QiIHRyYW5zZm9ybT0idHJhbnNsYXRlKDYwLjIwMzEyNSAwKSIvPjwvZz48L2c+PC9nPjxnIGlkPSJ0ZXh0XzUiPjxnIGNsaXAtcGF0aD0idXJsKCNwZmVjMjZjYzZjZikiPjxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDEwNS4xNjQzODkgNDguODA4NTY1KSBzY2FsZSgwLjEgLTAuMSkiPjx1c2UgeGxpbms6aHJlZj0iI0RlamFWdVNhbnNNb25vLTJiIi8+PC9nPjwvZz48L2c+PC9nPjwvZz48ZGVmcz48Y2xpcFBhdGggaWQ9InBmZWMyNmNjNmNmIj48cmVjdCB4PSI0LjMyIiB5PSI0LjMyIiB3aWR0aD0iMTM3Ljg5MDkwOSIgaGVpZ2h0PSI1Ny42Ii8+PC9jbGlwUGF0aD48L2RlZnM+PC9zdmc+'};
+ART.compileDevices=()=>`<section class="studio-compile compile-devices" aria-label="${L('两种设备实现同一个 CNOT','Two devices carry out the same CNOT')}"><p class="compile-context">${L('我们要完成的操作：用 q0 控制，对 q1 做 CNOT。','The operation we want: a CNOT with q0 as control and q1 as target.')}</p><div class="compile-circuits"><div><h3>${L('设备支持 CNOT','Device supports CNOT')}</h3><div class="lab-circuit compile-fatqat"><img src="${COMPILE_CIRCUIT_SRC.cnot}" alt="${L('FatQat 线路图：上方 q0 为控制位，下方 q1 为目标位，执行一个 CNOT。','FatQat circuit: q0 on top is the control, q1 below is the target, and one CNOT is applied.')}"></div><p>${L('直接执行 1 个 CNOT。','Run 1 CNOT directly.')}</p></div><div><h3>${L('设备支持 H 和 CZ','Device supports H and CZ')}</h3><div class="lab-circuit compile-fatqat"><img src="${COMPILE_CIRCUIT_SRC.hczh}" alt="${L('FatQat 线路图：在下方 q1 上执行 H，然后在 q0、q1 之间执行 CZ，最后在 q1 上执行 H。','FatQat circuit: H on q1 (bottom), then CZ between q0 and q1, then H on q1 again.')}"></div><p>${L('在 q1 上先做 H，再做 CZ，最后再在 q1 上做 H。','Apply H on q1, then CZ, then H on q1 again.')}</p></div></div></section>`;
+// A single circuit for questions: the CNOT to compile, or its H → CZ → H version.
+function compileCircuitImage(kind){
+ if(kind==='equiv')return `<div class="compile-equiv" role="img" aria-label="${L('q0 控制 q1 的 CNOT，等价于在 q1 上做 H、再做 CZ、再在 q1 上做 H','A CNOT with q0 controlling q1 equals H on q1, then CZ, then H on q1')}"><img src="${COMPILE_CIRCUIT_SRC.cnot}" alt=""><span aria-hidden="true">=</span><img src="${COMPILE_CIRCUIT_SRC.hczh}" alt=""></div>`;
+ return kind==='hczh'
+  ?`<div class="lab-circuit compile-fatqat compile-single"><img src="${COMPILE_CIRCUIT_SRC.hczh}" alt="${L('FatQat 线路图：在下方 q1 上执行 H，然后在 q0、q1 之间执行 CZ，最后在 q1 上执行 H。','FatQat circuit: H on q1 (bottom), then CZ between q0 and q1, then H on q1 again.')}"></div>`
+  :`<div class="lab-circuit compile-fatqat compile-single"><img src="${COMPILE_CIRCUIT_SRC.cnot}" alt="${L('FatQat 线路图：上方 q0 为控制位，下方 q1 为目标位，执行一个 CNOT。','FatQat circuit: q0 on top is the control, q1 below is the target, and one CNOT is applied.')}"></div>`;
+}
+ART.compileCnot=()=>compileCircuitImage('cnot');
 // Existing real-device photos keep their source captions.
 ART.hardwareRoute=p=>ROUTE_ART[p.route]();
 ;
@@ -2400,12 +2460,12 @@ function entPairCircuit(prep='independent',basis='Z',{measured=true,stage=null}=
   if(stage===null||stage>=2)columns.push({ops:[{type:'cx',wire:1,control:0}]});
   title=L('从两个零态制备贝尔态','Preparing a Bell state from two |0⟩ qubits');
  }
- if(basis==='X'){columns.push({ops:[gate(0,'H'),gate(1,'H')]});caption+=L('读出前双方各加 H，改变测量设置。',' Before readout, each side adds an H to change the measurement setting.');}
- if(measured){columns.push({ops:[{type:'measure',wire:0},{type:'measure',wire:1}]});caption+=L('表盘符号表示计算基测量；双线承载经典结果。',' The meter symbol is a computational-basis measurement; double lines carry the classical result.');}
+ if(basis==='X'){columns.push({ops:[gate(0,'H'),gate(1,'H')]});}
+ if(measured){columns.push({ops:[{type:'measure',wire:0},{type:'measure',wire:1}]});}
  return entCircuitSVG({wires,columns,title,caption,output:measured?['c₀','c₁']:[]});
 }
 function entCandidateCircuit(input='|ψ⟩'){
- return entCircuitSVG({wires:[{input},{input:'|0⟩'}],columns:[{width:132,ops:[{type:'span',wire:0,to:1,label:L('候选机器 U','Candidate U')}]}],title:L('一个任意输入态与一个零态一起进入同一台候选机器 U','An arbitrary input state and a |0⟩ go into the same candidate machine U'),caption:L('虚线框是假设中的通用机器，内部操作未知；不是已经实现的复制线路。','The dashed box is a hypothetical universal machine whose inner workings are unknown. It is not a copying circuit anyone has built.')});
+ return entCircuitSVG({wires:[{input},{input:'|0⟩'}],columns:[{width:132,ops:[{type:'span',wire:0,to:1,label:L('候选机器 U','Candidate U')}]}],title:L('一个任意输入态与一个零态一起进入同一台候选机器 U','An arbitrary input state and a |0⟩ go into the same candidate machine U')});
 }
 function entTeleportCircuit(m=null,resources=false){
  const op=(type,wire,extra={},active=true)=>({type,wire,...extra,...(m?{active}:{})});
@@ -2424,7 +2484,7 @@ function entLessonCircuit(kind){
  if(kind.startsWith('cnot'))return entCircuitSVG({wires:[{input:kind==='cnot10'?'|1⟩':'|0⟩'},{input:'|0⟩'}],columns:[{ops:[{type:'cx',control:0,wire:1}]}],title:L('q₀ 控制 q₁ 的 CNOT','CNOT with q₀ controlling q₁')});
  if(kind==='bell')return entPairCircuit('bell','Z',{measured:false});
  if(kind==='bell-measured')return entPairCircuit('bell');
- if(kind==='pair-Z'||kind==='pair-X')return `<div class="qc-comparison"><section><h3>${L('贝尔态','Bell state')}</h3>${entPairCircuit('bell',kind.slice(-1))}</section><section><h3>${L('随机准备 00 或 11','Random 00 or 11')}</h3>${entPairCircuit('mixed',kind.slice(-1))}</section></div>`;
+ if(kind==='pair-Z'||kind==='pair-X')return `<div class="qc-comparison"><section><h3>${L('贝尔态','Bell state')}</h3>${entPairCircuit('bell',kind.slice(-1))}</section><section><h3>${L('B 组','Group B')}</h3>${entPairCircuit('mixed',kind.slice(-1))}</section></div>`;
  if(kind==='candidate')return entCandidateCircuit();
  if(kind==='teleport-prepare')return entCircuitSVG({
   wires:[{name:'Q',owner:'Alice',input:'|ψ⟩'},{name:'A'},{name:'B',owner:'Bob'}],
@@ -2528,6 +2588,12 @@ function entBellTarget(state){
  // State overlap includes the relative phase and ignores an unobservable global phase.
  return Math.abs((state[0][0]+state[3][0])**2/2+(state[0][1]+state[3][1])**2/2-1)<1e-10;
 }
+function entPalette(full){
+ // Gate palette laid out like the circuit: one row per wire, CNOT spanning both.
+ const off=full?' disabled':'',tile=g=>`<button type="button" class="ent-tile" data-ent-gate="${g}" aria-label="${g[0]} q${g[1]}"${off}>${g[0]}</button>`;
+ const row=q=>`<span class="ent-wire">$q_${q}$</span>${['H','X','Z'].map(g=>tile(g+q)).join('')}`;
+ return `<div class="ent-palette" role="group" aria-label="${L('量子门','Gates')}">${row(0)}${row(1)}<button type="button" class="ent-tile ent-tile-cnot" data-ent-gate="CNOT" aria-label="${L('CNOT，q0 控制 q1','CNOT, q0 controls q1')}"${off}><svg viewBox="0 0 20 52" width="20" height="52" aria-hidden="true"><line x1="10" y1="10" x2="10" y2="50"/><circle cx="10" cy="10" r="4" class="dot"/><circle cx="10" cy="42" r="8"/><line x1="2" y1="42" x2="18" y2="42"/></svg><span>CNOT</span></button></div>`;
+}
 function entBellStateFormula(state){
  // H, X, Z and CNOT keep this builder's amplitudes real and equal in magnitude.
  const terms=state.map((a,i)=>({value:a[0],bits:i.toString(2).padStart(2,'0')})).filter(a=>Math.abs(a.value)>1e-10);
@@ -2544,7 +2610,7 @@ function entView(m){
   ready=['00','01','10','11'].every(x=>m.seen.includes(x))&&m.seen.includes('twice');message=L(`已执行 ${m.seen.filter(x=>/^[01]{2}$/.test(x)).length} / 4 种输入；再观察连续两次 CNOT。`,`Inputs tried: ${m.seen.filter(x=>/^[01]{2}$/.test(x)).length} / 4. Also watch two CNOTs in a row.`);
  }else if(m.kind==='bell-build'){
   const state=entBellState(m.gates),target=entBellTarget(state);
-  html=`${labCircuit({n:2,seq:m.gates,static:true,measured:false})}<p class="cap">${L('点击组件，按顺序加到线路末尾。CNOT 由 q0 控制 q1；最多添加 6 个门。','Click a gate to add it to the end of the circuit. CNOT uses q0 as control and q1 as target. You can add up to 6 gates.')}</p>${entButtons(ENT_BELL_GATES.map(g=>[g,g==='CNOT'?L('CNOT：q0 → q1','CNOT: q0 → q1'):`${g[0]} q${g[1]}`,m.gates.length>=6]),'gate')}${entButtons([['undo',L('撤销上一步','Undo'),!m.gates.length],['reset',L('恢复初态','Reset')]])}<p class="ent-label">${L('当前预期量子态','Expected state now')}</p><div class="math-line">$$${entBellStateFormula(state)}$$</div><p class="ent-result">${target?L('已得到目标贝尔态：00 与 11 等幅、同相位叠加。','You made the target Bell state: an equal, in-phase superposition of 00 and 11.'):L('还未得到目标态。目标是 00 与 11 等幅、同相位叠加，01 与 10 的概率幅为 0。','Not the target yet. The goal is an equal, in-phase superposition of 00 and 11, with zero amplitude on 01 and 10.')}</p><details><summary>${L('查看制备提示','Show a hint')}</summary><p>${L('先试 H q0，再加 CNOT。H 产生 00 与 10 的叠加；CNOT 保留 00，把 10 变为 11，并保留相干关系。也可以交换门的顺序，对照结果。','Try H q0 first, then add CNOT. H makes a superposition of 00 and 10; CNOT keeps 00, turns 10 into 11, and preserves the coherence between them. You can also swap the gate order and compare.')}</p></details>`;
+  html=`${labCircuit({n:2,seq:m.gates,static:true,measured:false})}<p class="cap">${L('点击量子门，按顺序加到线路末尾，最多 6 个。','Click a gate to add it to the end of the circuit, up to 6 gates.')}</p>${entPalette(m.gates.length>=6)}${entButtons([['undo',L('撤销上一步','Undo'),!m.gates.length],['reset',L('恢复初态','Reset')]])}<p class="ent-label">${L('当前预期量子态','Expected state now')}</p><div class="math-line">$$${entBellStateFormula(state)}$$</div><p class="ent-result">${target?L('已得到目标贝尔态：00 与 11 等幅、同相位叠加。','You made the target Bell state: an equal, in-phase superposition of 00 and 11.'):L('还未得到目标态。目标是 00 与 11 等幅、同相位叠加，01 与 10 的概率幅为 0。','Not the target yet. The goal is an equal, in-phase superposition of 00 and 11, with zero amplitude on 01 and 10.')}</p><details><summary>${L('查看制备提示','Show a hint')}</summary><p>${L('先试 H q0，再加 CNOT。H 产生 00 与 10 的叠加；CNOT 保留 00，把 10 变为 11，并保留相干关系。也可以交换门的顺序，对照结果。','Try H q0 first, then add CNOT. H makes a superposition of 00 and 10; CNOT keeps 00, turns 10 into 11, and preserves the coherence between them. You can also swap the gate order and compare.')}</p></details>`;
   ready=target;message=L('自由尝试不同组件，制备出目标贝尔态。','Try different gates freely until you make the target Bell state.');
  }
  return {html,ready,message};
@@ -2626,7 +2692,7 @@ function teleportScene(m){
   const active=id==='B'?m.gates.length>0:!measured&&(m.stage===1||m.stage===2&&id==='Q');
   return `<span class="teleport-held teleport-held-${id.toLowerCase()}${active?' is-active':''}${measured&&id!=='B'?' is-measured':''}${restored&&id==='B'?' is-restored':''}" data-held="${id}" aria-label="${id}${L('，',', ')}${label}">${id}</span>`;
  };
- const cat=(name,qubits)=>`<div class="teleport-cat teleport-cat-${name.toLowerCase()}"><span class="teleport-art"><img src="assets/illustrations/teleportation-cats-white-ears.png" alt="${name==='Alice'?L('白猫 Alice 手持两个量子比特','Alice, a white cat, holding two qubits'):L('灰猫 Bob 手持一个量子比特','Bob, a gray cat, holding one qubit')}" width="1776" height="888">${qubits}</span></div><h3>${name}</h3>`;
+ const cat=(name,qubits)=>`<div class="teleport-cat teleport-cat-${name.toLowerCase()}"><span class="teleport-art"><img src="assets/illustrations/teleportation-cats-white-ears-1280.webp" alt="${name==='Alice'?L('白猫 Alice 手持两个量子比特','Alice, a white cat, holding two qubits'):L('灰猫 Bob 手持一个量子比特','Bob, a gray cat, holding one qubit')}" width="1776" height="888">${qubits}</span></div><h3>${name}</h3>`;
  return `<div class="teleport-scene${received?' has-message':''}" tabindex="-1"><section class="teleport-person">${cat('Alice',held('Q',measured?L('已测量','measured'):L('待传输入','input to send'))+held('A',measured?L('已测量','measured'):L('共享纠缠的一半','half of the shared entanglement')))}${!received?records:''}</section><svg class="teleport-links" aria-label="${measured?L('经典消息由 Alice 发给 Bob','Classical message from Alice to Bob'):L('A 与 B 预先共享纠缠','A and B share entanglement in advance')}" role="img"><path class="${measured?'teleport-classical-link':'teleport-entangled-link'}"/><path class="teleport-arrow"/></svg><section class="teleport-person">${cat('Bob',held('B',restored?L('已恢复输入态','input state restored'):measured?L('等待修正','waiting for correction'):L('共享纠缠的另一半','other half of the shared entanglement')))}${received?records:''}</section></div>`;
 }
 // Locate the link endpoints from the actual held qubits at every viewport width.
@@ -2763,13 +2829,13 @@ function hardwareCircuit(completed=0,h=false){
 function hardwareDeviceSVG(mode,frame){
  const fixed=mode==='fixed',pos=hardwareAtomPositions(mode,frame);
  const gate=fixed?frame.gate?.map(p=>frame.map[p]):frame.gate;
- return `<svg class="hw-device" viewBox="0 0 540 ${fixed?210:300}" role="img" aria-label="${fixed?L('固定器件与量子态对应关系','Fixed sites and the qubit states they hold'):L('可重排阵列的原子位置：上方纠缠区，下方存储区','Atom positions in a reconfigurable array: entangling zone on top, storage zone below')}">
+ return `<svg class="hw-device" viewBox="${fixed?'50 62 440 126':'0 0 540 300'}" role="img" aria-label="${fixed?L('固定器件与量子态对应关系','Fixed sites and the qubit states they hold'):L('可重排阵列的原子位置：上方纠缠区，下方存储区','Atom positions in a reconfigurable array: entangling zone on top, storage zone below')}">
  ${fixed?`<path class="hw-link" d="M100 112H440"/>${[0,1,2].map(p=>`<rect class="hw-site" x="${76+p*170}" y="88" width="48" height="48" rx="8"/><text x="${100+p*170}" y="172" text-anchor="middle">${L(`器件 p${p}`,`Site p${p}`)}</text>`).join('')}`:`<rect class="hw-zone hw-ent" x="8" y="8" width="524" height="70" rx="12"/><rect class="hw-zone" x="8" y="84" width="524" height="206" rx="12"/><text x="22" y="36">${L('纠缠区','Entangling zone')}</text><text x="22" y="111">${L('存储区','Storage zone')}</text>`}
  ${gate?`<path class="hw-gate" d="M${pos[gate[0]].x} ${pos[gate[0]].y}L${pos[gate[1]].x} ${pos[gate[1]].y}"/><text class="hw-gate-label" x="${(pos[gate[0]].x+pos[gate[1]].x)/2}" y="${pos[gate[0]].y-25}" text-anchor="middle">CZ</text>`:''}
  ${Object.entries(pos).map(([id,p])=>`<g class="hw-atom" data-atom="${id}" transform="translate(${p.x} ${p.y})"><circle r="17"/><text text-anchor="middle" y="5">q${id}</text></g>`).join('')}</svg>`;
 }
 const HARDWARE_ROUTES=[
- [L('超导','Superconducting'),'fridgePhoto',L('超导电路的两个能级','Two energy levels of a superconducting circuit')],[L('离子阱','Trapped ions'),'ion',L('带电原子的两个内部态','Two internal states of a charged atom')],[L('中性原子','Neutral atoms'),'atom',L('中性原子的两个内部态','Two internal states of a neutral atom')],[L('光量子','Photonic'),'photon',L('光子的路径或偏振','A photon’s path or polarization')],[L('硅量子点','Silicon quantum dots'),'silicon',L('硅中单个电子自旋的两个方向','The two spin directions of a single electron in silicon')]
+ [L('超导','Superconducting'),'fridgePhoto',L('用超导电路的两个能级表示 |0⟩ 和 |1⟩','|0⟩ and |1⟩ are two energy levels of a superconducting circuit')],[L('离子阱','Trapped ions'),'ion',L('用带电原子的两个内部态表示 |0⟩ 和 |1⟩','|0⟩ and |1⟩ are two internal states of a charged atom')],[L('中性原子','Neutral atoms'),'atom',L('用中性原子的两个内部态表示 |0⟩ 和 |1⟩','|0⟩ and |1⟩ are two internal states of a neutral atom')],[L('光量子','Photonic'),'photon',L('用光子的两条路径或两个偏振方向表示 |0⟩ 和 |1⟩','|0⟩ and |1⟩ are two paths, or two polarizations, of a photon')],[L('半导体量子点','Semiconductor quantum dots'),'silicon',L('用半导体量子点中电子的自旋方向（自旋比特），或电子所在的位置（电荷比特），表示 |0⟩ 和 |1⟩','|0⟩ and |1⟩ are the spin direction of an electron in a semiconductor quantum dot (spin qubit), or which dot the electron sits in (charge qubit)')]
 ];
 ART.hardwareOverview=()=>`<div class="hw-overview">
  <div class="hw-route-buttons" role="group" aria-label="${L('选择硬件路线','Choose a hardware platform')}">${HARDWARE_ROUTES.map(([title],i)=>`<button type="button" class="hw-route-button" data-hw-route="${i}" aria-pressed="${i===0}" aria-controls="hw-route-panel-${i}">${title}</button>`).join('')}</div>
@@ -3028,8 +3094,8 @@ R.add('C3-2',[
 R.add('C3-3',[
  R.say('如果两个量子比特的状态无法拆成“q0 的状态”和“q1 的状态”分别描述，只能作为一个整体描述，就称它们处于<strong>纠缠</strong>态。','贝尔态（Bell 态）是最典型的纠缠态，共有四种。本节制备其中一种：',String.raw`$$\frac{|00\rangle+|11\rangle}{\sqrt2}.$$`, '它是 00 与 11 的等幅、同相位叠加：两项概率幅的大小相同、符号相同。直接测量两个比特时，只会得到 00 或 11，各有一半概率。'),
  R.play('bell-build','从 |00⟩ 开始，自己选择量子门，观察联合状态怎样变化，试着得到上一页的贝尔态。',{c:'entanglement',key:'bell-build'}),
- R.say('经过 H → CNOT，我们制备出了目标贝尔态。直接测量时，每一位的结果都是随机的，两位的结果却总相同；多次独立制备与测量的计数通常接近各半，不必恰好相等。'),
- R.say('这和第一节的 B 组很像：B 组也只出现 00 和 11，各占一半。区别在于关联的来源。B 组每次先随机选定 00 或 11，测量前两个比特就已经有确定的值，只是我们不知道；贝尔态在测量前并没有确定是 00 还是 11，两项同时存在，并保持着确定的相对相位。','只做直接测量，两者的统计结果完全相同。如果先给两个比特各施加一个 H 再测量，B 组会以各 25% 的概率出现 00、01、10、11；这个贝尔态却仍然只出现 00 和 11。这正是第二章看到的现象：相对相位在直接测量中看不出来，经过后续操作才显现出来。'),
+ R.say('经过 H → CNOT，我们制备出了目标贝尔态。直接测量时，每一位的结果都是随机的，两位的结果却总相同；多次独立制备与测量的计数通常接近各半，不必恰好相等。','线路末尾的表盘符号表示计算基测量，双线表示测量得到的经典结果。'),
+ R.say('还记得第一节的 B 组吗？<span class="cap-item"><strong>B 组</strong>：每次先随机选定 00 或 11（各占一半），再按选定的结果准备两个比特。测量结果只有 00 和 11，各占一半。</span>','贝尔态的测量结果也是这样，区别在于关联的来源。B 组在测量前两个比特就已经有确定的值，只是我们不知道；贝尔态在测量前并没有确定是 00 还是 11，两项同时存在，并保持着确定的相对相位。','只做直接测量，两者的统计结果完全相同。如果先给两个比特各施加一个 H 再测量，B 组会以各 25% 的概率出现 00、01、10、11；这个贝尔态却仍然只出现 00 和 11。这正是第二章看到的现象：相对相位在直接测量中看不出来，经过后续操作才显现出来。'),
  R.end('理想的 H → CNOT 会把 |00⟩ 制备成贝尔态。它的关联来自纠缠，而不是测量前就已确定的经典随机选择。<br>在用纠缠传送量子态之前，先看一个限制：未知的量子态能不能被复制？')
 ]);
 R.add('C3-4',[
@@ -3037,7 +3103,7 @@ R.add('C3-4',[
  R.ask('以 q0 为控制位的 CNOT，能把 $|0\\rangle$ 复制成 $|00\\rangle$，把 $|1\\rangle$ 复制成 $|11\\rangle$。<br><br>把 q0 换成 $|+\\rangle$，再执行同一个 CNOT，会得到两份 $|+\\rangle$ 吗？',
   ['会，得到两份 $|+\\rangle$','不会，得到的是上一节的贝尔态'],1,
   String.raw`这正是上一节的 H → CNOT：结果是贝尔态 $(|00\rangle+|11\rangle)/\sqrt2$，只会测到 00 或 11。两份 $|+\rangle$ 则是 $(|00\rangle+|01\rangle+|10\rangle+|11\rangle)/2$，四种结果各占 25%。CNOT 能复制 0 和 1，却不能复制它们的叠加。`),
- R.say('这不是 CNOT 不够好。量子操作对叠加态的作用，由它对 $|0\\rangle$、$|1\\rangle$ 的作用按概率幅组合而成。能复制 $|0\\rangle$ 和 $|1\\rangle$ 的机器，作用在叠加态上只能得到纠缠态，得不到两份副本。','可以证明：不存在一台机器能完美复制任意未知的量子态。这就是<strong>量子不可克隆定理</strong>。','先测量、再照着结果重新准备，也行不通：一次测量只得到 0 或 1，并且会让状态塌缩，得不到概率幅的完整信息。'),
+ R.say('这不是 CNOT 不够好。量子操作对叠加态的作用，由它对 $|0\\rangle$、$|1\\rangle$ 的作用按概率幅组合而成。能复制 $|0\\rangle$ 和 $|1\\rangle$ 的机器，作用在叠加态上只能得到纠缠态，得不到两份副本。','由此可以证明：不存在一台机器能完美复制任意未知的量子态。这就是<strong>量子不可克隆定理</strong>。'),
  R.ask('关于量子不可克隆定理，哪种说法正确？',
   ['任何量子态都无法再制备出第二份','只要测量得足够仔细，就能读出未知态再复制','已知的状态（例如 $|0\\rangle$）可以反复制备；不能完美复制的是任意未知的量子态'],2,
   '如果知道状态是什么，按同样的步骤再制备一份就可以。不可克隆定理限制的是：手里只有一个未知态时，无法得到它的完美副本。'),
@@ -3079,7 +3145,7 @@ R.add('C3-5',[
 // Illustrate explanations and predictions with the matching circuit.
 const CHAPTER_THREE_CIRCUITS={
  'C3-2':{0:'cnot',1:'cnot10',3:'cnot'},
- 'C3-3':{2:'bell-measured',3:'pair-X'},
+ 'C3-3':{2:'bell-measured'},
  'C3-4':{0:'candidate',1:'bell'},
 };
 for(const [id,pages] of Object.entries(CHAPTER_THREE_CIRCUITS)){
@@ -3091,36 +3157,38 @@ for(const [id,pages] of Object.entries(CHAPTER_THREE_CIRCUITS)){
 R.add('C4-1',[
  {t:'show',art:'quantumStack',cap:'前面我们在理想模型中使用量子线路。本章认识承载量子信息的硬件，再看编译怎样把量子线路变成设备能执行的操作。'},
  {t:'show',art:'hardwareOverview',cap:'五种路线用不同的物理系统承载量子信息。'},
- R.say('无论使用哪种物理系统，要执行一条量子线路，硬件都要完成三件事：把量子比特准备到初态，用控制信号实现量子门，最后测量并读出结果。下面逐一来看。'),
- {...R.ask('线路要求从 |0⟩ 开始。承载量子比特的器件或原子已经装进设备，能直接开始执行门操作吗？',['可以，装进设备后状态就确定了','还不行，需要先把量子比特准备到线路要求的初态'],1,'装进设备只是有了物理载体，并不等于它处在线路要求的量子态。开始计算前，需要先把量子比特准备到线路要求的初态。')},
- {...R.ask('线路中的 X 门要求把 |0⟩ 变成 |1⟩。设备此时需要做什么？',['施加控制信号，改变量子态','读出量子比特，记录一个结果'],0,'门操作改变状态。例如，超导设备可以用经过校准的微波信号操控量子比特；这一步不是测量。')},
+ R.say('无论使用哪种物理系统，要执行一条量子线路，硬件都要完成三件事：<span class="cap-item">把量子比特准备到初态；</span><span class="cap-item">用控制信号实现量子门；</span><span class="cap-item">最后测量并读出结果。</span>','下面逐一来看。'),
+ {...R.ask('原子已经装进设备，用来充当量子比特。现在可以直接开始做线路里的量子门了吗？',['可以，装进设备后状态就确定了','还不行，要先把它们准备到 |0⟩'],1,'原子装进设备时，状态并不确定。开始计算前，要先把每个量子比特准备到 |0⟩。')},
+ {...R.ask('量子比特已经准备到 |0⟩。线路的下一步是 X 门，把量子态变为 |1⟩。硬件怎样做到这一步？',['用控制信号驱动量子比特，改变它的状态','测量量子比特，把结果记为 1'],0,'量子门靠控制信号实现。例如超导设备用一段校准好的微波脉冲，把 |0⟩ 转到 |1⟩。测量只是读出结果，不能用来执行门。')},
  {...R.ask('两个比特从 |00⟩ 开始，只分别对它们做单比特门，就能制备贝尔态吗？',['能，只要每个比特都进入叠加态','不能，还需要能产生纠缠的双比特操作'],1,'单比特门只能分别改变每个比特，不能让两个独立的比特纠缠起来。硬件还要支持合适的双比特操作，例如第三章用到的 CNOT。')},
  {...R.ask('在离子阱中，离子处于不同的内部态时，被激光照射后会发出明暗不同的荧光。收集并判别这些信号，属于哪一步？',['准备初态','执行量子门','测量与读出'],2,'测量与读出得到结果记录；控制信号则用于实现线路要求的状态变化。')},
  R.ask('下面哪一组步骤能执行“从 |0⟩ 开始，做 X，再测量”的线路？',['准备初态 → 做 X → 测量','测量 → 做 X，不需要准备初态','把量子比特的载体移动到另一个位置 → 测量'],0,'准备、操控、测量是不同的任务。这些硬件路线都需要完成这些任务，只是物理过程不同。'),
  R.end('我们已经知道硬件要做什么。<br>下一节看看，怎样让同一条量子线路适配设备支持的门和连接方式。')
 ]);
 R.add('C4-2',[
- R.say('量子线路写出要做的操作。编译把它转换成目标设备能够执行的形式，同时保持原本的计算作用。','我们只看两个问题：设备不直接支持这个门怎么办？需要作用的两个比特连不上怎么办？'),
- {t:'show',art:'compileDevices',carry:'设备不直接支持这个门怎么办？',cap:'两种实现的理想作用相同。CZ（受控 Z 门）只在两个比特都为 1 时给这一项变号，其余情况不变；两侧的 H 都作用在 CNOT 的目标比特上。'},
+ R.say('写量子线路时，我们只管要做哪些操作。但每台设备都有自己的限制：只能直接执行某几种门，也不是任意两个量子比特之间都能直接作用。','编译就是把线路改写成目标设备能直接执行的版本，同时保证计算结果不变。这一节看两个常见问题：<span class="cap-item">设备不支持线路里的某个门；</span><span class="cap-item">需要一起作用的两个量子比特没有直接连接。</span>'),
+ {...R.ask('线路需要执行一个 CNOT 门（q0 控制 q1），但设备只支持 CZ 门和单比特门。怎样实现这个 CNOT？',
+  ['直接把 CNOT 换成 CZ','在 q1 上先做 H，再做 CZ，最后在 q1 上再做 H','在 q0 上先做 H，再做 CZ，最后在 q0 上再做 H','这台设备无法实现 CNOT'],1,
+  'CNOT 在控制位为 1 时对目标位做 X；CZ（受控 Z 门）在两个比特都为 1 时给这一项变号，相当于对目标位做 Z。H 能把 Z 变成 X：$HZH=X$。所以在目标位 q1 的两侧各加一个 H，H → CZ → H 的作用就和 CNOT 完全相同。H 加在 q0 上则不对：那样得到的是 q1 控制 q0 的 CNOT。'+compileCircuitImage('equiv'))},
  R.ask('用 H → CZ → H 替代一个 CNOT，门数增加了。这是否意味着编译失败？',['是，编译必须减少门数','不是，这些门共同实现了设备不能直接执行的操作'],1,'门分解首先要保持计算作用并适配设备。门数增加不等于编译失败。'),
- R.ask('再看连接问题。在超导等设备上，量子比特由芯片上位置固定的器件承载，只有相邻的器件之间才能直接执行双比特门。如果线路要求两个不相邻的量子比特执行双比特门，可以怎么做？',['忽略连接限制，直接执行双比特门','用 SWAP（交换门）交换两个器件承载的量子态，让它们由相邻的器件承载','省略这个双比特门'],1,'SWAP 交换两个相邻器件承载的量子态。交换后，原本不相邻的两个量子态就由相邻的器件承载，可以执行所需的门。器件本身不移动，也不能随意省略线路要求的操作。接下来逐步观察一种实现。'),
+ R.ask('在超导等设备上，量子比特由芯片上位置固定的器件承载，只有相邻的器件之间才能直接执行双比特门。如果线路要求两个不相邻的量子比特执行双比特门，可以怎么做？',['忽略连接限制，直接执行双比特门','用 SWAP（交换门）交换两个器件承载的量子态，让它们由相邻的器件承载','省略这个双比特门'],1,'SWAP 交换两个相邻器件承载的量子态。交换后，原本不相邻的两个量子态就由相邻的器件承载，可以执行所需的门。器件本身不移动，也不能随意省略线路要求的操作。接下来逐步观察一种实现。'),
  {t:'play',c:'hardwareCompile',mode:'fixed',task:'线路要求先做 CZ(q0, q2)，再做 CZ(q1, q2)。逐步观察固定连接上的实现。',ok:m=>m.finished,gh:'走到最后一步，观察量子态如何沿固定连接交换。'},
  R.ask('刚才的 SWAP 改变了什么？',['芯片上器件的位置','量子态由哪个器件承载'],1,'SWAP 交换两个器件承载的量子态，器件本身不移动。之后的操作要跟踪新的对应关系。'),
  {t:'play',c:'hardwareCompile',mode:'reconfigurable',task:'换成可重排的中性原子阵列：原子可以被激光“光镊”搬动，在上方的纠缠区执行双比特门，在下方的存储区等待。同样的三比特线路怎样执行？逐步观察原子移动与 CZ 的先后顺序。',ok:m=>m.finished,gh:'播放或逐步走到最后一步，再继续。'},
  R.ask('把 q0、q2 搬进纠缠区之后，线路要求的 CZ 就已经完成了吗？',['已经完成，靠近就等于执行了门','还没有，还要执行相应的门操作'],1,'移动只改变位置和可用的相互作用条件；CZ 是另一个操作。'),
  R.ask('这个示例为什么先把 q0 移开，再让 q1 与 q2 执行下一次 CZ？',['移动 q0 就是在测量它','为下一次操作安排位置，并减少对不参与运算的原子的影响','所有原子每次都必须回到最初的位置'],1,'这个示例让 q0 返回存储区，q2 留在纠缠区，再把 q1 搬进来。编译器安排的是具体的执行顺序，不只是翻译门的名字。'),
  R.ask('可重排阵列能把任意两个原子搬到一起。这是否说明它在所有方面都优于固定连接的设备？',['是，能移动就没有限制','不一定，移动需要时间，也要遵守设备的控制条件'],1,'不同架构提供不同的实现方式，也带来不同的约束。不能只凭“可重排”就判断哪种设备更好。'),
- {t:'show',art:'quantumStack',recap:true,cap:'沿图回顾：线路规定计算；编译安排门、位置与顺序；控制系统把指令变成信号，驱动物理硬件。实际系统还包含跨层的校准、运行时与纠错。'},
+ {t:'show',art:'quantumStack',recap:true,cap:'对照这张图，回想一下这一章你做过的事：<span class="cap-item">线路告诉计算机要算什么；</span><span class="cap-item">你看到编译把 CNOT 拆成设备支持的门，又用 SWAP 或搬动原子安排好位置和顺序；</span><span class="cap-item">最后，控制系统把这些指令变成微波、激光等信号，让硬件真正执行。</span><span class="cap-after">真实的量子计算机里，校准、运行时和纠错还会贯穿这几层。</span>'},
  R.ask('把 CZ 分配到可以直接作用的一对比特，并安排 SWAP 或原子移动，主要属于哪一层？',['应用与算法','编译','物理硬件'],1,'编译连接线路与设备。它要结合门集、连接方式和控制约束，安排保持原计算作用的实现。'),
- R.end('线路相同，在不同设备上的实现可以不同。<br>下一章看看噪声为什么会让实际结果偏离理想计算。')
+ R.end('线路相同，在不同设备上的实现可以不同，而编译的好坏会直接影响结果的质量：<span class="cap-item">超导芯片上，每个量子比特、每对连接的错误率都不一样。编译器可以把线路安排到表现更好的比特上，并尽量少用 SWAP。</span><span class="cap-item">中性原子阵列中，原子每移动一次都要花时间，还可能受到干扰。编译器可以规划更少、更短的移动，并把能同时执行的门安排在一起。</span><span class="cap-after">同一条线路，编译得好，结果就更接近理想。</span><br>下一章看看噪声为什么会让实际结果偏离理想计算。')
 ]);
 ;
 /* js/lessons/required-5.js */
 /* Layer 5: learn noise, bit flips and correction through short questions. */
 R.add('C5-1',[
  R.say('同样的量子实验，为什么不一定得到同样的结果？先做几道题，分清测量本身的随机性和噪声。'),
- R.ask('每次都重新准备 |+⟩，再理想地测量 0/1。有时得到 0，有时得到 1，这说明设备出错了吗？',['说明设备出错了','不说明，这个态的测量结果本来就有随机性'],1,'|+⟩ 在理想测量中得到 0、1 的概率各为一半。单次结果不确定，不代表发生了错误。'),
- R.play('single','反复准备 |+⟩ 并测量。先模拟 32 次，再换成 512 次，对比两次的计数。',{buttons:true,sample:true,controls:[['shots','重复次数',[[32,'32 次'],[512,'512 次']]]],initial:{prep:'plus',analysis:'none',shots:32},observe:[{shots:32},{shots:512}],note:'每次都重新准备 |+⟩ 再测量，单次结果无法预测。计数来自模拟采样，每次运行都不一样。',pm:'理论概率始终各占一半；每批计数都会上下波动，次数越多，比例越接近 50%。'}),
+ R.ask('在一台没有噪声的理想设备上，每次都重新准备 |+⟩ 并测量。结果有时是 0，有时是 1。这说明设备出错了吗？',['说明设备出错了','不说明，这个态的测量结果本来就有随机性'],1,'|+⟩ 在理想测量中得到 0、1 的概率各为一半。单次结果不确定，不代表发生了错误。'),
+ R.play('single','反复准备 |+⟩ 并测量。拖动滑块改变重复次数，分别试试少量（50 次以内）和大量（1000 次以上），对比计数。',{buttons:true,sample:true,controls:[['shots','重复次数',[[10,'10 次'],[20,'20 次'],[30,'30 次'],[50,'50 次'],[100,'100 次'],[200,'200 次'],[300,'300 次'],[500,'500 次'],[1000,'1000 次'],[2000,'2000 次'],[5000,'5000 次'],[10000,'10000 次']],{slider:true}]],initial:{prep:'plus',analysis:'none',shots:20},observe:[{shots:[0,50]},{shots:[1000,1e9]}],note:'每次都重新准备 |+⟩ 再测量，单次结果无法预测。计数来自模拟采样，每次运行都不一样。',pm:'理论概率始终各占一半；每批计数都会上下波动，次数越多，比例越接近 50%。'}),
  R.ask('理论上测到 0、1 的概率各为 50%。重复实验 100 次，得到 48 次 0、52 次 1。仅凭这一点，能确定有噪声吗？',['能，必须正好各 50 次才正常','不能，有限次数的计数本来就会波动'],1,'概率各占一半，不要求每批计数都恰好相等。这种采样波动在理想实验中也会出现。'),
  R.ask('已经正确准备了 |0⟩，没有安排任何改变状态的操作。测量前，环境扰动却把它变成了 |1⟩。这属于什么？',['噪声造成的状态错误','|0⟩ 的理想测量随机性'],0,'理想情况下，直接测量 |0⟩ 应当得到 0。这里是额外的物理扰动改变了状态；噪声也可能影响操作和读出。'),
  R.ask('读出仪器有时会把 0 记成 1。仅把实验从 100 次增加到 1000 次，会自动消除这种错误吗？',['会，多测几次就能修好','不会，只会更稳定地看清带有读出错误的结果'],1,'更多采样能减小统计波动，却不会自动修好读出仪器。要减少这种错误，需要针对错误来源采取措施。'),
@@ -3128,13 +3196,11 @@ R.add('C5-1',[
  R.end('测量可以天然随机，有限次计数也会波动；噪声则会额外影响状态、操作或读出。增加测量次数不能自动消除噪声。<br>下一节，试着发现并纠正一个错误。')
 ]);
 R.add('C5-2',[
- R.say('先看一种简单错误：0 变成 1，或 1 变成 0，叫作比特翻转（bit flip）。','从一个经典比特的例子开始：用 000 表示 0，用 111 表示 1。先假设最多只有一位发生翻转。'),
- R.ask('收到 010。在“最多一位翻转”的前提下，原来是哪一组？',['000','111'],0,'010 与 000 只差中间一位，与 111 差两位。在这个前提下，原来只能是 000，中间一位出错了。'),
- R.ask('要把 010 恢复成 000，应该做什么？',['把第一位翻转','把第二位再翻转一次','把第三位翻转'],1,'把中间的 1 翻回 0，就恢复了 000。找到错误后采取恢复操作，这就是纠正（correction）。'),
+ R.ask('<span class="q-lead">一种常见的错误是 0 变成了 1，或者 1 变成了 0，这叫<strong>比特翻转</strong>（bit flip）。怎么防？一个简单的办法是多存几份：把 0 存成 000，把 1 存成 111。</span><br><br>你收到了 010，其中只有一个比特发生了翻转。原来存的是哪一个？',['000','111'],0,'010 与 000 只差中间一位，与 111 差两位。所以原来只能是 000，中间一位出错了。把它翻回 0，就恢复了 000。找到错误并把它恢复，这就是纠正（correction）。'),
  R.ask('现在不告诉你每一位的值，只告诉你：第 1、2 位不同，第 2、3 位也不同。在最多一位翻转的前提下，哪一位出错了？',['第 1 位','第 2 位','第 3 位'],1,'两边都与中间不同，说明中间一位发生了翻转。无论原来是 000 还是 111，这条判断都成立：只比较各位之间的关系，就能得到错误线索。'),
  R.play('syndrome','逐个选择翻转的位置，只看“第 1、2 位是否相同”“第 2、3 位是否相同”，能不能找出出错的那一位？最后试试两位同时翻转。',{buttons:true,observe:[{mask:4},{mask:2},{mask:1},{mask:3}],pm:'单个翻转都能被准确定位；两位同时翻转时，比较结果会把它伪装成另一位出错。'}),
  R.ask('如果原来是 000，却有两位翻转成了 110，仍按“最多一位出错”来纠正，会得到什么？',['恢复为 000','误以为第三位出错，变成 111'],1,'110 与 111 只差一位，纠正反而会选错。这种三位保护只能纠正一位翻转，不能处理任意多个错误。'),
- R.say('怎样把这个思路用到量子信息上？难点在于：第三章讲过，未知的量子态不能复制，测量又会让它塌缩，所以不能像经典比特那样复制几份、逐一读出来比较。','量子纠错（QEC，Quantum Error Correction）把一个量子比特的信息编码到多个量子比特中，再用额外的辅助比特比较它们之间的关系（就像刚才比较“第 1、2 位是否相同”），取得错误线索，而不直接读出被保护的量子信息。','硬件上实际存在的量子比特叫<strong>物理比特</strong>；由多个物理比特共同编码、受到保护的那个量子比特叫<strong>逻辑比特</strong>。'),
+ R.say('经典比特可以直接读出每一位来比较，量子比特却不行：第三章讲过，未知的量子态不能复制，测量又会让它塌缩。那么，刚才的思路还能用在量子信息上吗？','可以，关键在于<strong>只比较、不读出</strong>。量子纠错（QEC，Quantum Error Correction）先把一个量子比特的信息分散编码到几个量子比特上，再借助额外的辅助比特，检查它们之间是否一致，就像刚才只问“第 1、2 位是否相同”，而不问每一位是多少。这样既能得到错误线索，又不会读出被保护的量子信息。','其中，硬件上实际存在的量子比特叫<strong>物理比特</strong>；由多个物理比特共同编码、受到保护的那个量子比特叫<strong>逻辑比特</strong>。'),
  R.ask('在三位量子翻转码中，通过比较已经确定：第 2 个物理比特发生了 X 翻转。哪种操作可以纠正它？',['测量所有物理比特，再按多数重新准备','在第 2 个物理比特上再施加一次 X 门'],1,'X 会交换 |0⟩ 和 |1⟩，连续两次 X 相互抵消。因此，定位后再施加一次 X，可以撤销这次翻转，而不必读出被保护的量子态。'),
  R.say('刚才只处理了翻转错误。量子态还可能发生相位错误，完整的量子纠错方案也要处理它们。','而且，检查和纠正的操作本身也可能出错。要完成长时间的计算，需要在计算过程中持续保护信息，并避免操作中的错误扩散到无法纠正。'),
  R.ask('下面哪种做法更接近容错量子计算？',['开始时纠错一次，之后不再检查','在计算过程中反复纠错，并用能控制错误传播的方式执行量子门'],1,'这就是容错量子计算（FTQC，Fault-Tolerant Quantum Computing）的方向：利用纠错和容错操作，让不完美的物理比特也能支持可靠的计算。它需要底层错误率足够低，单纯增加比特数量并不能保证成功。'),
@@ -3149,7 +3215,6 @@ R.add('C6-1',[
   ['几乎全部到达探测器 0','两个探测器各收到约一半，和上方路径的设置无关','取决于光子飞行的速度'],1,
   '如果光子真的只是随机选路，每条路通向两个探测器的机会都一样，结果应该总是各一半。下面用实验检验这个预测。'),leadArt:'mziSetup'},
  {t:'play',c:'mzi',task:'拖动滑条改变上方路径的相位，看看两个探测器的概率怎样变化。和你的预测一样吗？',
-  intro:['这就是马赫-曾德尔干涉仪：光子经过分束器 1 后，可能走上方或下方路径；上方路径有一块可调的相位片；两条路在分束器 2 汇合，再由两个探测器接收。'],
   gh:'把相位调到 180° 附近，看看光子去了哪里。',ok:st=>st.seen.includes('dark'),pm:'相位 0° 时光子全部到达探测器 0，180° 时全部到达探测器 1：只改变相位，就能决定光子去哪里。'},
  R.say(
   '结果和“随机选路”的预测不同：相位为 0° 时，光子全部到达探测器 0；180° 时，全部到达探测器 1。',
@@ -3162,7 +3227,7 @@ R.add('C6-1',[
   intro:['同样的事情也发生在量子线路里：分束器的作用相当于 H 门，相位片相当于给 $|1\\rangle$ 分量加上相位。','回到第二章的实验：A 组为 $|+\\rangle$，B 组为 $|-\\rangle$，相当于相位 0° 和 180°。两组直接测量看不出区别。'],
   explain:'A 全部测到 0，B 全部测到 1。直接测量时分不出来的两组，经过同一个 H 后完全分开了，和干涉仪里把相位从 0° 调到 180° 的效果一样。'
  }),
- {t:'show',art:'interferenceSums',cap:'为什么会这样？把 H 的作用拆开看：两个分量都会同时通向 0 和 1，每份概率幅是 +1/2 或 −1/2。通向同一结果的概率幅先相加，再取模平方，才得到概率。<span class="cap-item"><strong>A 组</strong>（$|+\\rangle$）：通向 0 的两份同号，相互增强；通向 1 的两份异号，相互抵消。</span><span class="cap-item"><strong>B 组</strong>（$|-\\rangle$）：恰好相反。</span>相位上的差别，就这样变成了测量概率的差别。'},
+ {t:'show',art:'interferenceSums',cap:'为什么会这样？把 H 的作用拆开看：两个分量都会同时通向 0 和 1，每份概率幅是 +1/2 或 −1/2。通向同一结果的概率幅先相加，再取模平方，才得到概率。<span class="cap-item"><strong>A 组</strong>（$|+\\rangle$）：通向 0 的两份同号，相互增强；通向 1 的两份异号，相互抵消。</span><span class="cap-item"><strong>B 组</strong>（$|-\\rangle$）：恰好相反。</span><span class="cap-after">相位上的差别，就这样变成了测量概率的差别。</span>'},
  R.ask(String.raw`$|-\rangle$ 经过 H 后，通向 0 的两份概率幅分别是 +1/2 和 −1/2。测到 0 的概率是多少？`,
   ['0%','50%','100%'],0,
   '先把概率幅相加：+1/2 − 1/2 = 0，再取模平方，得到 0%。如果像经典概率那样，把两条路径各自的概率 1/4 + 1/4 相加，就会错误地得到 50%。'),
@@ -3188,50 +3253,37 @@ R.add('C6-2',[
   o:['四个密码的机会一样','正确密码的机会已经更大'],a:0,
   after:'每个密码都是 25%。此时直接测量，就像随机猜一个，还没有偏向正确答案。'
  }),
- R.play('grover','先用检查规则做一次标记，看看概率有没有变化。',{
-  c:'groverLock',phase:'mark',stage:0,nextStage:1,action:'标记',
-  before:'第二章用 Z 门给单比特的 |1⟩ 分量变号。这里把检查规则做成一组量子门：正确密码对应的分量变号，其余保持不变。',
-  after:'10 对应的概率幅由正变负，但四个概率仍是 25%。和施加 Z 之后一样，只改变相位，还不会改变测量概率。',
-  detail:'这组门按“密码是否通过检查”的规则改变相位，不会把密码读出来，也不是对两个量子比特直接各加一个 Z。图中的 − 号只帮助你观察。'
- }),
- R.play('grover','现在加入干涉，观察正确密码的概率。',{
-  c:'groverLock',phase:'amplify',stage:1,nextStage:2,action:'放大',
-  before:'放大的做法叫“关于平均值翻转”：先求出四个概率幅的平均值，再把每个概率幅以平均值为中心翻到另一侧，即 新值 = 2 × 平均值 − 原值。标记后四个概率幅是 +1/2、+1/2、−1/2、+1/2，平均值是 1/4。先算一算，再点“放大”验证。',
-  after:'三个错误密码：2 × 1/4 − 1/2 = 0；正确密码 10：2 × 1/4 − (−1/2) = 1。概率是概率幅的平方，所以正确密码从 25% 升到 100%，其余降到 0。',
-  detail:'被标记成负号的分量离平均值最远，翻转后变得最大；其余分量正好落在 0。这就是干涉：错误答案的概率幅相互抵消，正确答案的相互增强。100% 是四选一理想模型的结果，候选更多时每轮只增大一部分，需要重复若干轮。'
- }),
- R.play('grover','再做一轮“标记＋放大”，会发生什么？',{
-  c:'groverLock',phase:'repeat',stage:2,nextStage:4,action:'再做一轮',
-  o:['仍然保持 100%','概率可能下降'],a:1,
-  before:'先作预测，再用同一把锁验证。',
-  after:'正确密码的概率从 100% 回到 25%。Grover 需要安排好操作次数，重复更多次不一定更好。'
- }),
- R.play('grover','最后确认：Grover 怎样让正确答案更容易被测到？',{
-  c:'groverLock',phase:'recap',stage:2,
-  o:['提前告诉算法正确密码，再把它读出来','用检查规则做相位标记，再用干涉提高目标概率'],a:1,
-  after:'检查规则 → 相位标记 → 干涉放大。合适的操作能提高找到目标的概率，但不是重复越多越好。',
-  detail:'候选更多时，Grover 需要的检查次数与候选数的平方根成正比（约 0.8×√N 次，N 是候选数），而逐个检查平均需要候选数的一半。'
- }),
+ R.ask('<span class="q-lead">第二章用 Z 门给单比特的 |1⟩ 分量变号。这里把检查规则做成一组量子门：正确密码对应的分量变号，其余保持不变。</span><br><br>用检查规则做一次标记后，四个密码的测量概率会怎样变化？',
+  ['正确密码的概率变大','四个概率都不变，仍是 25%','正确密码的概率变为 0'],1,
+  '10 对应的概率幅由正变负，但四个概率仍是 25%。和施加 Z 之后一样，只改变相位，还不会改变测量概率。这组门按“密码是否通过检查”的规则改变相位，不会把密码读出来，也不是对两个量子比特直接各加一个 Z。'),
+ R.ask('<span class="q-lead">放大的做法叫“关于平均值翻转”：先求出四个概率幅的平均值，再把每个概率幅以平均值为中心翻到另一侧，即 新值 = 2 × 平均值 − 原值。标记前，四个概率幅都是 +1/2，平均值是 1/2；标记后变成 +1/2、+1/2、−1/2、+1/2，平均值变为 (1/2 + 1/2 − 1/2 + 1/2) ÷ 4 = 1/4。放大用的是标记后的平均值 1/4。先算一算，再选出答案。</span><br><br>现在加入干涉。放大之后，正确密码 10 的概率会变成多少？',
+  ['仍是 25%','50%','100%'],2,
+  '用标记后的平均值 1/4 计算。三个错误密码：2 × 1/4 − 1/2 = 0；正确密码 10：2 × 1/4 − (−1/2) = 1。概率是概率幅的平方，所以正确密码从 25% 升到 100%，其余降到 0。被标记成负号的分量离平均值最远，翻转后变得最大；其余分量正好落在 0。这就是干涉：错误答案的概率幅相互抵消，正确答案的相互增强。100% 是四选一理想模型的结果，候选更多时每轮只增大一部分，需要重复若干轮。'),
+ R.ask('刚才一轮“标记＋放大”后，正确密码的概率已经是 100%。如果再做一轮，会发生什么？',
+  ['仍然保持 100%','概率可能下降'],1,
+  '再做一轮后，正确密码的概率会从 100% 回到 25%。Grover 需要安排好操作次数，重复更多次不一定更好。'),
+ R.ask('回顾一下：在这把密码锁上，Grover 算法是靠什么让正确密码更容易被测到的？',
+  ['提前告诉算法正确密码，再把它读出来','用检查规则做相位标记，再用干涉提高目标概率'],1,
+  '检查规则 → 相位标记 → 干涉放大。合适的操作能提高找到目标的概率，但不是重复越多越好。候选更多时，Grover 需要的检查次数与候选数的平方根成正比（约 0.8×√N 次，N 是候选数），而逐个检查平均需要候选数的一半。'),
  R.end('Grover 用检查规则标记目标，再用干涉放大它的概率。<br>下一节认识另一种著名的量子算法：用周期分解整数的 Shor 算法。')
 ]);
 
 R.add('C6-3',[
  R.say(
   '把两个质数相乘很容易，例如 3 × 5 = 15；反过来，把一个很大的整数分解成质因数却很难。数字有几百位时，已知的经典算法也需要极长的时间。现在广泛使用的 RSA 等公钥密码，正是依靠这种困难来保护信息。',
-  '1994 年，Peter Shor 提出了一种量子算法：在足够大、足够可靠的量子计算机上，它可以高效地分解整数。它的关键一步，是把“分解整数”变成“寻找周期”。'
+  '1994 年，Peter Shor 提出了一种量子算法：在足够大、足够可靠的量子计算机上，它可以高效地分解整数。它的关键一步，是把“分解整数”变成“寻找周期”。','接下来我们一起试着分解 15 吧：选一个与 15 互质（除 1 以外没有公因数）的数，比如 2，看看 2 的各次方除以 15 的余数有什么规律。'
  ),
- {t:'show',art:'shorPeriod',cap:'以分解 15 为例：选一个与 15 互质（除 1 以外没有公因数）的数，比如 2，计算 2 的各次方除以 15 的余数。余数按 1、2、4、8 的顺序循环出现。'},
- R.ask('根据表格，从 x = 0 开始，余数每隔几步重复一次？',['2 步','4 步','8 步'],1,'2⁰ 除以 15 余 1，2⁴ = 16 除以 15 又余 1，之后余数继续按 1、2、4、8 重复。所以周期 r = 4。'),
+ {...R.ask('根据表格，从 x = 0 开始，余数每隔几步重复一次？',['2 步','4 步','8 步'],1,'2⁰ 除以 15 余 1，2⁴ = 16 除以 15 又余 1，之后余数继续按 1、2、4、8 重复。所以周期 r = 4。'),leadArt:'shorPeriod'},
  R.say(
   '找到周期后，剩下的工作用经典计算就能快速完成。周期 r = 4 是偶数，先算 $2^{r/2}=2^2=4$，再分别求 4 − 1 = 3 和 4 + 1 = 5 与 15 的最大公因数：',
   String.raw`$$\gcd(3,15)=3,\qquad \gcd(5,15)=5.$$`,
   '于是得到 15 = 3 × 5。对其他整数，这个步骤偶尔会失败，换一个底数重试即可。'
  ),
  R.ask('Shor 算法中，哪一步真正需要量子计算机？',['求最大公因数','找出余数序列的周期','把两个因数相乘，检验结果'],1,'求最大公因数和检验乘积，经典计算都很快。困难在于：整数很大时，周期可能非常长，逐个计算余数去找周期，和穷举一样慢。量子计算机把许多指数放进叠加态，再用量子傅里叶变换（一种通过干涉提取周期的量子操作），让与周期有关的结果增强，从而高效地得到周期信息。'),
- {t:'show',art:'algorithmOverview',cap:'除了 Grover 和 Shor，量子算法还在模拟分子与材料、优化等方向上发展。不同算法针对的任务不同，能带来的提升也不同。'},
+ {t:'show',art:'algorithmOverview',cap:'除了 Grover 和 Shor，量子算法还在求解线性方程组（与机器学习密切相关）、模拟分子与材料、优化等方向上发展。不同算法针对的任务不同，能带来的提升也不同。'},
  R.ask('“Shor 算法已经让今天的银行加密失效了。”这句话应怎样判断？',
   ['准确，算法已经提出，加密就失效了','不准确，分解实用规模的密钥需要大规模的容错量子计算机，目前还做不到'],1,
-  '今天的量子计算机，规模和错误率都还远远不够。分解 RSA 这样的实用密钥，需要大量逻辑比特，以及第五章介绍的容错量子计算。不过这种潜在风险是真实的，人们已经在开发和部署能抵抗量子攻击的新密码方法。'),
+  '目前还做不到。要分解 RSA 这类实际使用的密钥，需要一台拥有大量逻辑比特的容错量子计算机（第五章介绍过），而今天的量子计算机在规模和保真度上都还差得很远。不过这个风险是真实存在的，所以人们已经开始研发并部署能抵御量子攻击的新一代密码。'),
  R.end('Shor 算法把分解整数变成寻找周期，再用干涉高效地找出周期。Grover 和 Shor 都说明：量子算法的能力来自对概率幅的精心安排，而不是同时试遍所有答案。<br>下一章用 FatQat 把量子操作写成程序。')
 ]);
 ;
@@ -3245,14 +3297,14 @@ R.add('C7-1',[
  R.lab('执行采样，并读取计数。',{labKey:'code',codeStage:'execute',seed:['H'],measured:true,shots:100,explain:true,showCode:true,codeFirst:true,ok:m=>!!m.result,gh:'采样一次，观察 0 和 1 分别出现了多少次。'}),
  R.ask('如果输出中有「\'0\': 49」，它表示什么？',['概率幅是 49','测到 0 共 49 次','第 49 个量子比特'],1,'键是测量结果，值是次数。它不等于量子态的概率幅。'),
  R.lab('这次不用 H，改用 X：计数会怎样变化？先在心里预测，再加入一个 X 门并采样，留意代码同步改变。',{labKey:'code',seed:[],measured:true,shots:100,edit:true,gates:['H','X'],showCode:true,codeFirst:true,explain:true,ok:m=>m.seq.join(',')==='X'&&!!m.result,gh:'加入一个 X 门，再采样。'}),
- R.say('本节的计数来自网页内的模拟，网页并不运行上面展示的 FatQat Python 代码。有限次采样不一定恰好符合理论比例；真实设备还涉及实际的准备、控制与读出，增加采样次数不会自动消除设备误差。','想继续使用 FatQat，可以复制实验代码，在安装了 FatQat 的 Python 环境中运行。<a class="career-doc-link" href="https://fatqat.readthedocs.io/en/latest/guide/quickstart/" target="_blank" rel="noopener noreferrer">继续使用 FatQat：快速入门（新窗口）</a>'),
+ R.say('刚才的计数是在网页里模拟出来的。想亲手运行这段代码？安装 FatQat 后，把实验代码复制到自己的 Python 环境里就能运行。','<a class="career-doc-link" href="https://fatqat.readthedocs.io/en/latest/guide/quickstart/" target="_blank" rel="noopener noreferrer">查看 FatQat 快速入门</a>'),
  R.end('你已经了解怎样用代码描述一个量子实验。让这样的程序在真实设备上运行，还需要哪些人的工作？')
 ]);
 R.add('C7-2',[
- {t:'show',art:'careerFlow',cap:'这些工作相互合作，同一个人也可能跨越多个方向。'},
- {t:'show',art:'careerDirections',cap:'点击方向查看具体工作与相关基础。这是探索入口，不是固定的专业或岗位边界。'},
- {t:'show',art:'careerNext',cap:'兴趣选择没有对错，随时可以切换。后续任务不影响本课完成。'},
- R.end('这门课提供了一张入门地图。带着一个感兴趣的问题继续学习，在具体的小项目中逐步积累能力，也逐步了解自己喜欢怎样的工作。')
+ {t:'show',art:'careerFlow',cap:'一个量子程序从写出来到在设备上运行，要经过这么多人的工作。你对哪一环最好奇？'},
+ {t:'show',art:'careerDirections',cap:'点开你感兴趣的方向，看看每天具体做什么、需要哪些基础。多点几个也没关系，很多人都会跨越不同方向。'},
+ {t:'show',art:'careerNext',cap:'选一个你最想先试试的方向吧！选哪个都没有对错，之后随时可以换。'},
+ R.end('恭喜你走完了这门课！它为你画了一张量子计算的入门地图。接下来，带着一个你真正好奇的问题继续学下去，在一个个小项目里积累能力，也慢慢发现自己最喜欢做什么。')
 ]);
 ;
 /* js/lessons/en/required-1.js */
@@ -3407,8 +3459,8 @@ R.en('C3-2',[
 R.en('C3-3',[
  R.say('If the state of two qubits can\'t be broken into "a state for q0" and "a state for q1", and can only be described as a whole, we say the qubits are <strong>entangled</strong>.','The best-known entangled states are the four Bell states. In this lesson, we prepare this one:',String.raw`$$\frac{|00\rangle+|11\rangle}{\sqrt2}.$$`, 'It\'s an equal, in-phase superposition of 00 and 11: the two amplitudes have the same size and the same sign. Measure both qubits directly and you only ever get 00 or 11, each with probability one half.'),
  R.play('bell-build','Start from |00⟩ and pick the gates yourself. Watch how the joint state changes, and try to reach the Bell state from the previous page.',{c:'entanglement',key:'bell-build'}),
- R.say('H followed by CNOT produces the Bell state we were after. Under direct measurement, each bit on its own is random, yet the two bits always agree. Over many rounds of preparing and measuring, the counts usually come out close to 50/50, though not necessarily exactly even.'),
- R.say('This looks a lot like Group B from the first lesson, which also gives only 00 and 11, half the time each. The difference is where the correlation comes from. In Group B, 00 or 11 is picked at random each round, so the bits already have definite values before measurement; we just don\'t know them yet. In the Bell state, whether you\'ll get 00 or 11 isn\'t settled before measurement: both terms are present at once, with a definite relative phase between them.','Direct measurement alone gives identical statistics for the two. But apply an H to each bit before measuring, and Group B gives 00, 01, 10, and 11 at 25% each, while the Bell state still gives only 00 and 11. It\'s the same effect you saw in Chapter 2: relative phase is invisible to direct measurement and only shows up after later operations.'),
+ R.say('H followed by CNOT produces the Bell state we were after. Under direct measurement, each bit on its own is random, yet the two bits always agree. Over many rounds of preparing and measuring, the counts usually come out close to 50/50, though not necessarily exactly even.','The meter symbol at the end of the circuit is a computational-basis measurement; the double lines carry the classical results.'),
+ R.say('Remember Group B from the first lesson?<span class="cap-item"><strong>Group B</strong>: each round, we first pick 00 or 11 at random (even odds), then set both bits to match. Measuring gives only 00 and 11, half the time each.</span>','The Bell state gives the same results. The difference is where the correlation comes from. In Group B, the bits already have definite values before measurement; we just don\'t know them yet. In the Bell state, whether you\'ll get 00 or 11 isn\'t settled before measurement: both terms are present at once, with a definite relative phase between them.','Direct measurement alone gives identical statistics for the two. But apply an H to each bit before measuring, and Group B gives 00, 01, 10, and 11 at 25% each, while the Bell state still gives only 00 and 11. It\'s the same effect you saw in Chapter 2: relative phase is invisible to direct measurement and only shows up after later operations.'),
  R.end('An ideal H → CNOT turns |00⟩ into a Bell state. Its correlation comes from entanglement, not from a classical random choice made before measurement.<br>Before we use entanglement to send a quantum state, let\'s look at a limit: can you copy an unknown quantum state?')
 ]);
 R.en('C3-4',[
@@ -3416,7 +3468,7 @@ R.en('C3-4',[
  R.ask('A CNOT with q0 as the control copies $|0\\rangle$ into $|00\\rangle$ and $|1\\rangle$ into $|11\\rangle$.<br><br>If q0 is $|+\\rangle$ instead, does the same CNOT give you two copies of $|+\\rangle$?',
   ['Yes, two copies of $|+\\rangle$','No, it gives the Bell state from the previous lesson'],1,
   String.raw`This is exactly the H → CNOT from the previous lesson, so the result is the Bell state $(|00\rangle+|11\rangle)/\sqrt2$, which only ever gives 00 or 11. Two copies of $|+\rangle$ would be $(|00\rangle+|01\rangle+|10\rangle+|11\rangle)/2$, with all four outcomes at 25% each. CNOT can copy 0 and 1, but not superpositions of them.`),
- R.say('The problem isn\'t CNOT. Any quantum operation acts on a superposition by acting on $|0\\rangle$ and $|1\\rangle$ and combining the results with the same amplitudes. So a machine that copies $|0\\rangle$ and $|1\\rangle$ can only turn a superposition into an entangled state, never into two copies.','In fact, it can be proved that no machine can perfectly copy an arbitrary unknown quantum state. This is the <strong>no-cloning theorem</strong>.','Measuring the state and then preparing a new one from the result doesn\'t work either. A single measurement gives only 0 or 1 and collapses the state, so you can\'t learn the full amplitudes.'),
+ R.say('The problem isn\'t CNOT. Any quantum operation acts on a superposition by acting on $|0\\rangle$ and $|1\\rangle$ and combining the results with the same amplitudes. So a machine that copies $|0\\rangle$ and $|1\\rangle$ can only turn a superposition into an entangled state, never into two copies.','From this, you can prove that no machine can perfectly copy an arbitrary unknown quantum state. This is the <strong>no-cloning theorem</strong>.'),
  R.ask('Which statement about the no-cloning theorem is correct?',
   ['No quantum state can ever be prepared twice','With a careful enough measurement, you can read out an unknown state and then copy it','A known state (such as $|0\\rangle$) can be prepared over and over; what can\'t be perfectly copied is an arbitrary unknown quantum state'],2,
   'If you know what the state is, you can just prepare another one the same way. What the no-cloning theorem rules out is making a perfect copy when all you have is a single unknown state.'),
@@ -3459,7 +3511,7 @@ R.en('C3-5',[
 {
  const circuits={
   'C3-2':{0:'cnot',1:'cnot10',3:'cnot'},
-  'C3-3':{2:'bell-measured',3:'pair-X'},
+  'C3-3':{2:'bell-measured'},
   'C3-4':{0:'candidate',1:'bell'},
  };
  for(const [id,pages] of Object.entries(circuits)){
@@ -3472,36 +3524,38 @@ R.en('C3-5',[
 R.en('C4-1',[
  {t:'show',art:'quantumStack',cap:'Until now, our circuits have lived in an ideal world. In this chapter you’ll meet the hardware that actually stores quantum information, and see how compilation turns a circuit into operations a real device can run.'},
  {t:'show',art:'hardwareOverview',cap:'Here are five hardware platforms, each storing quantum information in a different physical system.'},
- R.say('Whatever the physical system, running a quantum circuit asks three things of the hardware: get the qubits into their starting state, carry out quantum gates with control signals, and finally measure to read out the result. Let’s take them one at a time.'),
- {...R.ask('The circuit says to start from |0⟩, and the device elements or atoms that hold the qubits are already in the machine. Can it start applying gates right away?',['Yes — once they’re in the device, their state is set','Not yet — the qubits first have to be prepared in the starting state the circuit needs'],1,'Having the physical carriers in the machine doesn’t mean they’re in the right quantum state. Before any computing, the qubits have to be prepared in the starting state the circuit asks for.')},
- {...R.ask('The circuit has an X gate that should turn |0⟩ into |1⟩. What does the device need to do?',['Send a control signal that changes the quantum state','Read out the qubit and record an outcome'],0,'Gates change the state. A superconducting device, for example, drives the qubit with a carefully calibrated microwave signal. That’s not a measurement.')},
+ R.say('Whatever the physical system, running a quantum circuit asks three things of the hardware:<span class="cap-item">get the qubits into their starting state;</span><span class="cap-item">carry out quantum gates with control signals;</span><span class="cap-item">finally, measure to read out the result.</span>','Let’s take them one at a time.'),
+ {...R.ask('The atoms that will serve as qubits are now inside the machine. Can the circuit’s gates start right away?',['Yes — once they’re in the device, their state is set','Not yet — they first have to be prepared in |0⟩'],1,'When the atoms go into the machine, their state isn’t set. Before any computing, each qubit has to be prepared in |0⟩.')},
+ {...R.ask('The qubit is now in |0⟩. The next step in the circuit is an X gate, which changes the quantum state to |1⟩. How does the hardware do that?',['Drive the qubit with a control signal that changes its state','Measure the qubit and record the result as 1'],0,'Gates are carried out with control signals. A superconducting device, for example, uses a calibrated microwave pulse to turn |0⟩ into |1⟩. Measuring only reads out a result; it can’t perform a gate.')},
  {...R.ask('Two qubits start in |00⟩. Can you make a Bell state using only single-qubit gates on each one?',['Yes, as long as each qubit is put into superposition','No — you also need a two-qubit operation that can create entanglement'],1,'Single-qubit gates act on each qubit separately, so they can’t entangle two independent qubits. The hardware also has to support a suitable two-qubit operation, like the CNOT from Chapter 3.')},
  {...R.ask('In a trapped-ion device, a laser makes each ion either glow brightly or stay dark, depending on its internal state. Collecting these signals and telling them apart is part of which job?',['Preparing the starting state','Applying quantum gates','Measurement and readout'],2,'Measurement and readout produce a recorded outcome. Control signals, by contrast, are what make the state changes the circuit asks for.')},
  R.ask('To run the circuit “start from |0⟩, apply X, then measure,” what sequence does the hardware follow?',['Prepare the starting state → apply X → measure','Measure → apply X (no preparation needed)','Move the qubit’s physical carrier somewhere else → measure'],0,'Preparation, control and measurement are separate jobs. Every hardware platform has to do all three; only the physics behind them differs.'),
  R.end('Now you know what the hardware has to do.<br>Next, see how a single circuit gets adapted to the gates and connectivity a particular device supports.')
 ]);
 R.en('C4-2',[
- R.say('A quantum circuit lists the operations to perform. Compilation rewrites it into a form the target device can run, without changing what it computes.','We’ll focus on two questions: what if the device can’t run a gate directly? And what if two qubits that need to interact aren’t connected?'),
- {t:'show',art:'compileDevices',carry:'What if the device can’t run a gate directly?',cap:'In the ideal case, both versions do exactly the same thing. CZ (controlled-Z) flips the sign of a term only when both qubits are 1 and leaves everything else alone. The H gates on either side both act on the CNOT’s target qubit.'},
+ R.say('When you write a quantum circuit, you only say which operations to perform. But every device has its limits: it can run only a few kinds of gates directly, and not every pair of qubits can interact directly.','Compilation rewrites the circuit into a version the target device can run directly, without changing the result. This lesson looks at two common problems:<span class="cap-item">the device doesn’t support a gate in the circuit;</span><span class="cap-item">two qubits that need to interact aren’t directly connected.</span>'),
+ {...R.ask('The circuit needs a CNOT gate (q0 controlling q1), but the device only supports CZ gates and single-qubit gates. How do you carry out this CNOT?',
+  ['Just replace the CNOT with a CZ','Apply H on q1, then CZ, then H on q1 again','Apply H on q0, then CZ, then H on q0 again','This device can’t carry out a CNOT'],1,
+  'A CNOT applies X to the target when the control is 1. A CZ (controlled-Z) flips the sign of the term where both qubits are 1, which amounts to applying Z to the target. H turns Z into X: $HZH=X$. So with an H on each side of the target q1, H → CZ → H does exactly what the CNOT does. Putting the H gates on q0 instead gives a CNOT with q1 controlling q0.'+compileCircuitImage('equiv'))},
  R.ask('Swapping one CNOT for H → CZ → H adds gates. Does that mean compilation failed?',['Yes — compilation should always reduce the gate count','No — together these gates do something the device can’t run directly'],1,'The first job of gate decomposition is to keep the computation the same and fit the device. More gates doesn’t mean compilation failed.'),
- R.ask('Now for connectivity. On superconducting and similar devices, each qubit is held by a device element at a fixed spot on the chip, and two-qubit gates can only run directly between neighboring elements. If the circuit needs a two-qubit gate between qubits that aren’t neighbors, what can you do?',['Ignore the connectivity limit and run the gate anyway','Use SWAP gates to exchange the states held by two elements, until the two states sit on neighboring elements','Skip that two-qubit gate'],1,'SWAP exchanges the quantum states held by two neighboring elements. After swapping, the two states that started far apart are held by neighbors and can take part in the gate. The elements themselves never move, and you can’t just drop an operation the circuit needs. Next, step through one way to do it.'),
+ R.ask('On superconducting and similar devices, each qubit is held by a device element at a fixed spot on the chip, and two-qubit gates can only run directly between neighboring elements. If the circuit needs a two-qubit gate between qubits that aren’t neighbors, what can you do?',['Ignore the connectivity limit and run the gate anyway','Use SWAP gates to exchange the states held by two elements, until the two states sit on neighboring elements','Skip that two-qubit gate'],1,'SWAP exchanges the quantum states held by two neighboring elements. After swapping, the two states that started far apart are held by neighbors and can take part in the gate. The elements themselves never move, and you can’t just drop an operation the circuit needs. Next, step through one way to do it.'),
  {t:'play',c:'hardwareCompile',mode:'fixed',task:'The circuit asks for CZ(q0, q2), then CZ(q1, q2). Step through how this runs with fixed connectivity.',ok:m=>m.finished,gh:'Go to the last step and watch the quantum states get swapped along the fixed connections.'},
  R.ask('What did the SWAP actually change?',['Where the elements sit on the chip','Which element holds which quantum state'],1,'SWAP exchanges the quantum states held by two elements; the elements stay put. Every operation after that has to keep track of the new mapping.'),
  {t:'play',c:'hardwareCompile',mode:'reconfigurable',task:'Now try a reconfigurable neutral-atom array. Here, atoms can be moved with laser “optical tweezers”: two-qubit gates happen in the entangling zone at the top, and atoms wait in the storage zone at the bottom. How does the same three-qubit circuit run here? Step through the sequence of atom moves and CZ gates.',ok:m=>m.finished,gh:'Press play or step through to the end, then continue.'},
  R.ask('Once q0 and q2 have moved into the entangling zone, has the circuit’s CZ already happened?',['Yes — being close together is the same as running the gate','No — the gate still has to be applied'],1,'Moving only changes where the atoms are and which interactions are possible. The CZ is a separate operation.'),
  R.ask('Why does this example move q0 out first, before q1 and q2 do the next CZ?',['Moving q0 is the same as measuring it','To set up positions for the next operation and limit the effect on atoms that aren’t involved','Every atom always has to return to where it started'],1,'Here q0 goes back to the storage zone, q2 stays in the entangling zone, and q1 is brought in. The compiler plans the actual order of operations, not just a translation of gate names.'),
  R.ask('A reconfigurable array can bring any two atoms together. Does that make it better than fixed-connectivity devices in every way?',['Yes — if atoms can move, there are no limits','Not necessarily — moving takes time and has to respect the device’s control constraints'],1,'Each architecture offers its own ways to implement a circuit, along with its own constraints. Being “reconfigurable” doesn’t by itself make a device better.'),
- {t:'show',art:'quantumStack',recap:true,cap:'Use the diagram to review: the circuit defines the computation; compilation works out the gates, positions and order; and the control system turns those instructions into signals that drive the physical hardware. Real systems also include calibration, runtime and error correction, which span several layers.'},
+ {t:'show',art:'quantumStack',recap:true,cap:'Look at this diagram and think back over what you did in this chapter:<span class="cap-item">the circuit tells the computer what to compute;</span><span class="cap-item">you watched compilation break a CNOT into gates the device supports, then use SWAPs or atom moves to set up positions and order;</span><span class="cap-item">finally, the control system turns those instructions into microwave or laser signals that make the hardware actually run.</span><span class="cap-after">In a real quantum computer, calibration, runtime and error correction also run through these layers.</span>'},
  R.ask('Assigning a CZ to a pair of qubits that can interact directly, and planning SWAPs or atom moves — which layer does this mainly belong to?',['Applications and algorithms','Compilation','Physical hardware'],1,'Compilation is the bridge between circuits and devices. Working within the gate set, connectivity and control constraints, it plans an implementation that keeps the original computation intact.'),
- R.end('The same circuit can be implemented in different ways on different devices.<br>In the next chapter, see why noise pulls real results away from the ideal ones.')
+ R.end('The same circuit can be implemented in different ways on different devices, and how well it is compiled directly affects the quality of the result:<span class="cap-item">On a superconducting chip, every qubit and every connection has its own error rate. The compiler can place the circuit on the better-performing qubits and use as few SWAPs as possible.</span><span class="cap-item">In a neutral-atom array, every move takes time and can disturb the atoms. The compiler can plan fewer, shorter moves and group gates that can run at the same time.</span><span class="cap-after">Compile the same circuit well, and the result comes closer to the ideal.</span><br>In the next chapter, see why noise pulls real results away from the ideal ones.')
 ]);
 ;
 /* js/lessons/en/required-5.js */
 /* English pages for chapter 5; must mirror js/lessons/required-5.js page for page. */
 R.en('C5-1',[
  R.say('Why doesn’t the same quantum experiment always give the same result? Let’s work through a few questions and learn to tell the built-in randomness of measurement apart from noise.'),
- R.ask('You prepare a fresh |+⟩ each time and measure it with an ideal 0/1 measurement. Sometimes you get 0, sometimes 1. Did the device make a mistake?',['Yes, the device made an error','No — this state’s outcomes are random to begin with'],1,'With an ideal measurement, |+⟩ gives 0 or 1 with probability 1/2 each. Not being able to predict a single outcome doesn’t mean anything went wrong.'),
- R.play('single','Prepare |+⟩ and measure it over and over. Simulate 32 shots first, then switch to 512 and compare the counts.',{buttons:true,sample:true,controls:[['shots','Shots',[[32,'32 shots'],[512,'512 shots']]]],initial:{prep:'plus',analysis:'none',shots:32},observe:[{shots:32},{shots:512}],note:'Every shot prepares a fresh |+⟩ and measures it, so no single outcome can be predicted. The counts come from simulated sampling and change every time you run it.',pm:'The theoretical probabilities stay at 1/2 each. Each batch of counts wobbles around that, and the more shots you take, the closer the split gets to 50%.'}),
+ R.ask('On an ideal, noise-free device, you prepare a fresh |+⟩ each time and measure it. Sometimes you get 0, sometimes 1. Did the device make a mistake?',['Yes, the device made an error','No — this state’s outcomes are random to begin with'],1,'With an ideal measurement, |+⟩ gives 0 or 1 with probability 1/2 each. Not being able to predict a single outcome doesn’t mean anything went wrong.'),
+ R.play('single','Prepare |+⟩ and measure it over and over. Drag the slider to change the number of shots, try both a few (50 or fewer) and many (1000 or more), and compare the counts.',{buttons:true,sample:true,controls:[['shots','Shots',[[10,'10 shots'],[20,'20 shots'],[30,'30 shots'],[50,'50 shots'],[100,'100 shots'],[200,'200 shots'],[300,'300 shots'],[500,'500 shots'],[1000,'1000 shots'],[2000,'2000 shots'],[5000,'5000 shots'],[10000,'10000 shots']],{slider:true}]],initial:{prep:'plus',analysis:'none',shots:20},observe:[{shots:[0,50]},{shots:[1000,1e9]}],note:'Every shot prepares a fresh |+⟩ and measures it, so no single outcome can be predicted. The counts come from simulated sampling and change every time you run it.',pm:'The theoretical probabilities stay at 1/2 each. Each batch of counts wobbles around that, and the more shots you take, the closer the split gets to 50%.'}),
  R.ask('In theory, 0 and 1 each have a 50% chance. You run the experiment 100 times and get 48 zeros and 52 ones. Is that alone enough to say there’s noise?',['Yes — a working device should give exactly 50 of each','No — counts from a limited number of shots naturally fluctuate'],1,'Equal probabilities don’t mean every batch splits exactly evenly. This kind of sampling fluctuation shows up even in an ideal experiment.'),
  R.ask('You correctly prepared |0⟩ and didn’t plan any operation that changes it. But before measurement, a disturbance from the environment turned it into |1⟩. What is this?',['A state error caused by noise','The randomness that measuring |0⟩ has even in an ideal device'],0,'Ideally, measuring |0⟩ always gives 0. Here an extra physical disturbance changed the state. Noise can also affect operations and readout.'),
  R.ask('The readout instrument sometimes records a 0 as a 1. If you just go from 100 shots to 1000, will that error go away on its own?',['Yes, measuring more will fix it','No — you’ll just get a steadier view of results that still contain readout errors'],1,'More samples smooth out statistical fluctuation, but they don’t fix the readout instrument. Reducing this error means tackling its source.'),
@@ -3509,13 +3563,11 @@ R.en('C5-1',[
  R.end('Some measurement outcomes are random by nature, and counts from a limited number of shots fluctuate. Noise is something extra that affects the state, the operations or the readout, and taking more shots won’t make it go away.<br>In the next lesson, try detecting and correcting an error.')
 ]);
 R.en('C5-2',[
- R.say('Let’s start with a simple kind of error: a 0 turning into a 1, or a 1 turning into a 0. This is called a bit flip.','First, a classical example: use 000 to stand for 0 and 111 to stand for 1. For now, assume at most one bit flips.'),
- R.ask('You receive 010. If at most one bit flipped, which codeword was sent?',['000','111'],0,'010 differs from 000 only in the middle bit, but from 111 in two bits. So under this assumption it must have been 000, with an error in the middle.'),
- R.ask('How do you turn 010 back into 000?',['Flip the first bit','Flip the second bit back','Flip the third bit'],1,'Flip the middle 1 back to 0 and you have 000 again. Finding an error and undoing it is called correction.'),
+ R.ask('<span class="q-lead">A common kind of error is a 0 turning into a 1, or a 1 into a 0. This is called a <strong>bit flip</strong>. How do you guard against it? One simple way is to store extra copies: save 0 as 000 and 1 as 111.</span><br><br>You receive 010, and exactly one bit has flipped. What was originally stored?',['000','111'],0,'010 differs from 000 only in the middle bit, but from 111 in two bits. So it must have been 000, with an error in the middle. Flip it back to 0 and you have 000 again. Finding an error and undoing it is called correction.'),
  R.ask('Now you aren’t told any of the bit values. You only know that bits 1 and 2 differ, and bits 2 and 3 also differ. If at most one bit flipped, which one is wrong?',['Bit 1','Bit 2','Bit 3'],1,'The middle bit disagrees with both of its neighbors, so it’s the one that flipped. This works whether the original was 000 or 111: just comparing the bits with each other gives you a clue about the error.'),
  R.play('syndrome','Choose a position to flip, one at a time. Using only “are bits 1 and 2 the same?” and “are bits 2 and 3 the same?”, can you find the wrong bit? At the end, try flipping two bits at once.',{buttons:true,observe:[{mask:4},{mask:2},{mask:1},{mask:3}],pm:'Any single flip can be pinned down exactly. When two bits flip at once, the comparisons point to a different bit as the culprit.'}),
  R.ask('Say the original was 000, but two bits flipped and you got 110. If you still correct as if there’s “at most one error,” what do you end up with?',['Back to 000','You conclude the third bit is wrong and get 111'],1,'110 is only one bit away from 111, so the correction picks the wrong answer. This three-bit scheme can fix one flip, not any number of errors.'),
- R.say('How do we bring this idea to quantum information? There’s a catch. As you saw in Chapter 3, an unknown quantum state can’t be copied, and measuring it makes it collapse. So you can’t make several copies and read each one out to compare them, the way you would with classical bits.','Quantum error correction (QEC) spreads the information of one qubit across several qubits, then uses extra helper qubits to compare how those qubits relate to one another (just like asking “are bits 1 and 2 the same?” above). That reveals clues about errors without directly reading out the protected quantum information.','The qubits that physically exist in the hardware are called <strong>physical qubits</strong>; the protected qubit encoded jointly by several of them is called a <strong>logical qubit</strong>.'),
+ R.say('With classical bits, you can read out each bit and compare them. Qubits don’t allow that: as you saw in Chapter 3, an unknown quantum state can’t be copied, and measuring it makes it collapse. So can the idea above still work for quantum information?','Yes, and the key is to <strong>compare without reading out</strong>. Quantum error correction (QEC) first spreads the information of one qubit across several qubits, then uses extra helper qubits to check whether they agree with one another, just like asking “are bits 1 and 2 the same?” above without asking what each bit is. That gives clues about errors without reading out the protected quantum information.','Here, the qubits that physically exist in the hardware are called <strong>physical qubits</strong>; the protected qubit encoded jointly by several of them is called a <strong>logical qubit</strong>.'),
  R.ask('In the three-qubit bit-flip code, the comparisons show that physical qubit 2 has suffered an X flip. How do you fix it?',['Measure all the physical qubits, then re-prepare them by majority vote','Apply another X gate to physical qubit 2'],1,'X swaps |0⟩ and |1⟩, so two X gates in a row cancel out. Once you know where the error is, applying X again undoes the flip without reading out the protected quantum state.'),
  R.say('So far we’ve only dealt with flip errors. Quantum states can also suffer phase errors, and a complete quantum error correction scheme has to handle those too.','On top of that, the checks and corrections can go wrong themselves. To finish a long computation, the information has to stay protected the whole time, and errors from operations must be kept from spreading beyond what can be corrected.'),
  R.ask('Which approach is closer to fault-tolerant quantum computing?',['Correct errors once at the start, then never check again','Keep correcting errors throughout the computation, and run gates in ways that limit how errors spread'],1,'That’s the idea behind fault-tolerant quantum computing (FTQC): using error correction and fault-tolerant operations so that imperfect physical qubits can still support reliable computation. It needs low enough error rates in the hardware; just adding more qubits doesn’t guarantee success.'),
@@ -3530,7 +3582,6 @@ R.en('C6-1',[
   ['Almost all of them reach detector 0','Roughly half each, no matter how the upper path is set','It depends on how fast the photon travels'],1,
   'If the photon really just picked a path at random, each path would send it to either detector equally often, so you’d always see a half-and-half split. Now let’s test that prediction with the experiment.'),leadArt:'mziSetup'},
  {t:'play',c:'mzi',task:'Drag the slider to change the phase on the upper path, and watch how the detector probabilities change. Does this match your prediction?',
-  intro:['This is the Mach–Zehnder interferometer. After beam splitter 1, the photon can take the upper or lower path, and the upper path has an adjustable phase shifter. The two paths meet at beam splitter 2, and two detectors pick up the photon.'],
   gh:'Set the phase to about 180° and see where the photon goes.',ok:st=>st.seen.includes('dark'),pm:'At 0°, every photon reaches detector 0; at 180°, every photon reaches detector 1. Changing nothing but the phase decides where the photon ends up.'},
  R.say(
   'That’s not what the “random path” prediction said: at 0°, every photon reaches detector 0, and at 180°, every photon reaches detector 1.',
@@ -3543,7 +3594,7 @@ R.en('C6-1',[
   intro:['The same thing happens in quantum circuits: a beam splitter acts like an H gate, and a phase shifter is like adding a phase to the $|1\\rangle$ component.','Remember the Chapter 2 experiment? Group A is $|+\\rangle$ and group B is $|-\\rangle$, matching phases of 0° and 180°. Measured directly, the two look exactly the same.'],
   explain:'A always gives 0 and B always gives 1. Two groups you couldn’t tell apart by measuring directly are now completely different after the same H — just like turning the interferometer’s phase from 0° to 180°.'
  }),
- {t:'show',art:'interferenceSums',cap:'Why does this happen? Break H down: each of the two components leads to both 0 and 1, with an amplitude of +1/2 or −1/2. Amplitudes heading to the same outcome are added first, and only then is the magnitude squared to give a probability.<span class="cap-item"><strong>Group A</strong> ($|+\\rangle$): the two amplitudes toward 0 have the same sign and reinforce; the two toward 1 have opposite signs and cancel.</span><span class="cap-item"><strong>Group B</strong> ($|-\\rangle$): exactly the reverse.</span>That’s how a difference in phase becomes a difference in measurement probabilities.'},
+ {t:'show',art:'interferenceSums',cap:'Why does this happen? Break H down: each of the two components leads to both 0 and 1, with an amplitude of +1/2 or −1/2. Amplitudes heading to the same outcome are added first, and only then is the magnitude squared to give a probability.<span class="cap-item"><strong>Group A</strong> ($|+\\rangle$): the two amplitudes toward 0 have the same sign and reinforce; the two toward 1 have opposite signs and cancel.</span><span class="cap-item"><strong>Group B</strong> ($|-\\rangle$): exactly the reverse.</span><span class="cap-after">That’s how a difference in phase becomes a difference in measurement probabilities.</span>'},
  R.ask(String.raw`After H, the two amplitudes of $|-\rangle$ leading to 0 are +1/2 and −1/2. What’s the probability of measuring 0?`,
   ['0%','50%','100%'],0,
   'Add the amplitudes first: +1/2 − 1/2 = 0. Squaring the magnitude gives 0%. If you added the two paths’ probabilities instead, the classical way (1/4 + 1/4), you’d wrongly get 50%.'),
@@ -3569,50 +3620,37 @@ R.en('C6-2',[
   o:['All four codes are equally likely','The correct code is already more likely'],a:0,
   after:'Each code sits at 25%. Measuring now is no better than a random guess; nothing favors the correct code yet.'
  }),
- R.play('grover','First, use the checking rule to mark once. Do the probabilities change?',{
-  c:'groverLock',phase:'mark',stage:0,nextStage:1,action:'Mark',
-  before:'In Chapter 2, the Z gate flipped the sign of a single qubit’s |1⟩ component. Here the checking rule is built from a set of quantum gates: the component for the correct code flips sign, and the others stay as they are.',
-  after:'The amplitude of 10 goes from positive to negative, but all four probabilities are still 25%. Just as with Z, changing only the phase doesn’t change the measurement probabilities yet.',
-  detail:'These gates change the phase based on one rule: does the code pass the check? They don’t read out the code, and they aren’t just a Z on each of the two qubits. The − sign in the figure is only there to show you what happened.'
- }),
- R.play('grover','Now add interference and watch the probability of the correct code.',{
-  c:'groverLock',phase:'amplify',stage:1,nextStage:2,action:'Amplify',
-  before:'Amplifying works by “reflecting about the average”: find the average of the four amplitudes, then flip each amplitude to the other side of that average, so new value = 2 × average − old value. After marking, the amplitudes are +1/2, +1/2, −1/2, +1/2, and their average is 1/4. Work it out yourself, then click “Amplify” to check.',
-  after:'For each of the three wrong codes: 2 × 1/4 − 1/2 = 0. For the correct code 10: 2 × 1/4 − (−1/2) = 1. Probability is the amplitude squared, so the correct code jumps from 25% to 100% and the others drop to 0.',
-  detail:'The component marked with a minus sign is farthest from the average, so the reflection makes it the largest, while the others land exactly on 0. That’s interference: the wrong answers’ amplitudes cancel and the right answer’s reinforce. The 100% holds for this ideal four-candidate model; with more candidates, each round raises the probability only partway, so you need several rounds.'
- }),
- R.play('grover','What happens if you run another round of “mark + amplify”?',{
-  c:'groverLock',phase:'repeat',stage:2,nextStage:4,action:'Run another round',
-  o:['It stays at 100%','The probability may drop'],a:1,
-  before:'Make a prediction, then check it on the same lock.',
-  after:'The correct code’s probability falls from 100% back to 25%. Grover needs the right number of rounds; more isn’t always better.'
- }),
- R.play('grover','One last check: how does Grover make the right answer easier to measure?',{
-  c:'groverLock',phase:'recap',stage:2,
-  o:['Tell the algorithm the correct code in advance, then read it out','Mark the target’s phase with the checking rule, then use interference to raise its probability'],a:1,
-  after:'Checking rule → phase mark → amplify by interference. The right operations raise the chance of finding the target, but more rounds aren’t always better.',
-  detail:'As the number of candidates N grows, the number of checks Grover needs grows only with its square root (about 0.8×√N). Checking candidates one by one takes N/2 checks on average.'
- }),
+ R.ask('<span class="q-lead">In Chapter 2, the Z gate flipped the sign of a single qubit’s |1⟩ component. Here the checking rule is built from a set of quantum gates: the component for the correct code flips sign, and the others stay as they are.</span><br><br>After marking once with the checking rule, how do the four codes’ measurement probabilities change?',
+  ['The correct code becomes more likely','None of them change; all stay at 25%','The correct code drops to 0'],1,
+  'The amplitude of 10 goes from positive to negative, but all four probabilities are still 25%. Just as with Z, changing only the phase doesn’t change the measurement probabilities yet. These gates change the phase based on one rule: does the code pass the check? They don’t read out the code, and they aren’t just a Z on each of the two qubits.'),
+ R.ask('<span class="q-lead">Amplifying works by “reflecting about the average”: find the average of the four amplitudes, then flip each amplitude to the other side of that average, so new value = 2 × average − old value. Before marking, all four amplitudes are +1/2, so their average is 1/2. After marking they are +1/2, +1/2, −1/2, +1/2, and the average becomes (1/2 + 1/2 − 1/2 + 1/2) ÷ 4 = 1/4. Amplifying uses this after-marking average of 1/4. Work it out, then pick an answer.</span><br><br>Now add interference. After amplifying, what will the probability of the correct code 10 be?',
+  ['Still 25%','50%','100%'],2,
+  'Use the after-marking average, 1/4. For each of the three wrong codes: 2 × 1/4 − 1/2 = 0. For the correct code 10: 2 × 1/4 − (−1/2) = 1. Probability is the amplitude squared, so the correct code jumps from 25% to 100% and the others drop to 0. The component marked with a minus sign is farthest from the average, so the reflection makes it the largest, while the others land exactly on 0. That’s interference: the wrong answers’ amplitudes cancel and the right answer’s reinforce. The 100% holds for this ideal four-candidate model; with more candidates, each round raises the probability only partway, so you need several rounds.'),
+ R.ask('After one round of “mark + amplify,” the correct code is already at 100%. What happens if you run another round?',
+  ['It stays at 100%','The probability may drop'],1,
+  'Another round sends the correct code’s probability from 100% back to 25%. Grover needs the right number of rounds; more isn’t always better.'),
+ R.ask('Looking back: on this lock, what did Grover’s algorithm use to make the correct code easier to measure?',
+  ['Tell the algorithm the correct code in advance, then read it out','Mark the target’s phase with the checking rule, then use interference to raise its probability'],1,
+  'Checking rule → phase mark → amplify by interference. The right operations raise the chance of finding the target, but more rounds aren’t always better. As the number of candidates N grows, the number of checks Grover needs grows only with its square root (about 0.8×√N). Checking candidates one by one takes N/2 checks on average.'),
  R.end('Grover uses a checking rule to mark the target, then interference to amplify its probability.<br>In the next lesson, meet another famous quantum algorithm: Shor’s algorithm, which factors integers by finding periods.')
 ]);
 
 R.en('C6-3',[
  R.say(
   'Multiplying two primes is easy: 3 × 5 = 15. Going the other way — breaking a very large integer into its prime factors — is hard. For numbers hundreds of digits long, even the best known classical algorithms take an extremely long time. Widely used public-key cryptography such as RSA relies on exactly this difficulty to keep information safe.',
-  'In 1994, Peter Shor found a quantum algorithm that can factor integers efficiently, given a large and reliable enough quantum computer. Its key move is turning “factor an integer” into “find a period.”'
+  'In 1994, Peter Shor found a quantum algorithm that can factor integers efficiently, given a large and reliable enough quantum computer. Its key move is turning “factor an integer” into “find a period.”','Let’s try factoring 15 together. Pick a number coprime to 15 (one that shares no factor with it except 1), such as 2, and look for a pattern in the remainders when powers of 2 are divided by 15.'
  ),
- {t:'show',art:'shorPeriod',cap:'Let’s factor 15 as an example. Pick a number coprime to 15 (one that shares no factor with it except 1), such as 2, and work out the remainders when powers of 2 are divided by 15. The remainders cycle through 1, 2, 4, 8.'},
- R.ask('Using the table and starting from x = 0, how many steps until the remainders repeat?',['2 steps','4 steps','8 steps'],1,'2⁰ divided by 15 leaves 1, and 2⁴ = 16 divided by 15 leaves 1 again; from there the remainders keep cycling through 1, 2, 4, 8. So the period is r = 4.'),
+ {...R.ask('Using the table and starting from x = 0, how many steps until the remainders repeat?',['2 steps','4 steps','8 steps'],1,'2⁰ divided by 15 leaves 1, and 2⁴ = 16 divided by 15 leaves 1 again; from there the remainders keep cycling through 1, 2, 4, 8. So the period is r = 4.'),leadArt:'shorPeriod'},
  R.say(
   'Once you know the period, an ordinary computer can quickly finish the job. The period r = 4 is even, so compute $2^{r/2}=2^2=4$, then find the greatest common divisor of 15 with 4 − 1 = 3 and with 4 + 1 = 5:',
   String.raw`$$\gcd(3,15)=3,\qquad \gcd(5,15)=5.$$`,
   'That gives 15 = 3 × 5. For other integers this step occasionally fails; if it does, just try again with a different base.'
  ),
  R.ask('Which step of Shor’s algorithm actually needs a quantum computer?',['Finding the greatest common divisor','Finding the period of the remainders','Multiplying the two factors to check the answer'],1,'Finding the gcd and checking the product are both fast on classical computers. The hard part is the period: for large integers it can be enormous, and computing remainders one at a time to find it is as slow as brute force. A quantum computer puts many exponents into superposition, then uses the quantum Fourier transform (a quantum operation that pulls out the period through interference) to reinforce the outcomes tied to the period. That lets it get the period efficiently.'),
- {t:'show',art:'algorithmOverview',cap:'Grover and Shor aren’t the only ones: quantum algorithms are also being developed for simulating molecules and materials, for optimization, and more. Different algorithms suit different tasks and offer different kinds of speedup.'},
+ {t:'show',art:'algorithmOverview',cap:'Grover and Shor aren’t the only ones: quantum algorithms are also being developed for solving linear equations (closely tied to machine learning), simulating molecules and materials, optimization, and more. Different algorithms suit different tasks and offer different kinds of speedup.'},
  R.ask('“Shor’s algorithm has already broken the encryption banks use today.” Is this claim right?',
   ['Yes — once the algorithm was published, the encryption was broken','No — factoring keys of practical size needs a large-scale fault-tolerant quantum computer, and none exists yet'],1,
-  'Today’s quantum computers are still far too small and too error-prone. Factoring real-world keys such as RSA keys would take many logical qubits, plus the fault-tolerant quantum computing from Chapter 5. Still, the risk is real, and new cryptography designed to resist quantum attacks is already being developed and rolled out.'),
+  'Not yet. Factoring keys actually in use, such as RSA keys, would take a fault-tolerant quantum computer with many logical qubits (see Chapter 5), and today’s machines fall far short in both size and fidelity. The risk is real, though, which is why a new generation of cryptography built to withstand quantum attacks is already being developed and rolled out.'),
  R.end('Shor’s algorithm turns factoring into period finding, then uses interference to find the period efficiently. Grover and Shor both show that the power of quantum algorithms comes from carefully arranging amplitudes, not from trying every answer at once.<br>In the next chapter, use FatQat to write quantum operations as a program.')
 ]);
 ;
@@ -3626,14 +3664,14 @@ R.en('C7-1',[
  R.lab('Run the sampling and read the counts.',{labKey:'code',codeStage:'execute',seed:['H'],measured:true,shots:100,explain:true,showCode:true,codeFirst:true,ok:m=>!!m.result,gh:'Sample once and see how many times 0 and 1 each come up.'}),
  R.ask('If the output includes "\'0\': 49", what does that mean?',['The amplitude is 49','0 was measured 49 times','The 49th qubit'],1,'The key is the measurement outcome and the value is how many times it came up. It isn’t the amplitude of the quantum state.'),
  R.lab('This time, use X instead of H. How will the counts change? Make a prediction first, then add one X gate and sample. Watch the code change as you go.',{labKey:'code',seed:[],measured:true,shots:100,edit:true,gates:['H','X'],showCode:true,codeFirst:true,explain:true,ok:m=>m.seq.join(',')==='X'&&!!m.result,gh:'Add one X gate, then sample.'}),
- R.say('The counts in this lesson come from a simulation running inside the web page; the page doesn’t actually run the FatQat Python code shown above. With a limited number of shots, the counts won’t always match the theoretical ratio exactly. Real devices also involve actual preparation, control and readout, so taking more shots won’t automatically remove device errors.','To keep going with FatQat, copy the lab code and run it in a Python environment with FatQat installed. <a class="career-doc-link" href="https://fatqat.readthedocs.io/en/latest/guide/quickstart/" target="_blank" rel="noopener noreferrer">Continue with FatQat: Quickstart (opens in a new window)</a>'),
+ R.say('The counts you just saw were simulated in the browser. Want to run the code yourself? Install FatQat, copy the experiment code into your own Python environment, and run it.','<a class="career-doc-link" href="https://fatqat.readthedocs.io/en/latest/guide/quickstart/" target="_blank" rel="noopener noreferrer">Read the FatQat quickstart</a>'),
  R.end('You’ve seen how to describe a quantum experiment in code. What work goes into running a program like this on a real device, and who does it?')
 ]);
 R.en('C7-2',[
- {t:'show',art:'careerFlow',cap:'These kinds of work depend on one another, and one person may cover several of them.'},
- {t:'show',art:'careerDirections',cap:'Click a direction to see what the work involves and the background it draws on. Treat it as a starting point for exploring, not a hard line between majors or jobs.'},
- {t:'show',art:'careerNext',cap:'There’s no right or wrong interest, and you can change your mind any time. The follow-up tasks don’t affect finishing this course.'},
- R.end('This course gives you a starter map. Keep learning by following a question you care about, build your skills one small project at a time, and discover along the way what kind of work you enjoy.')
+ {t:'show',art:'careerFlow',cap:'Getting a quantum program from code to a running device takes all of this work. Which part are you most curious about?'},
+ {t:'show',art:'careerDirections',cap:'Open a direction that interests you to see what the day-to-day work is and what background it takes. Feel free to open several; many people move between directions.'},
+ {t:'show',art:'careerNext',cap:'Pick the direction you’d most like to try first! There’s no wrong choice, and you can switch any time.'},
+ R.end('Congratulations on finishing the course! It has given you a starter map of quantum computing. From here, follow a question you’re genuinely curious about, build your skills one small project at a time, and find out along the way what you enjoy most.')
 ]);
 ;
 /* js/completion.js */
@@ -3684,18 +3722,49 @@ function completionTimeLabel(date){
  const p=n=>String(n).padStart(2,'0');
  return `${date.getFullYear()}.${p(date.getMonth()+1)}.${p(date.getDate())} ${p(date.getHours())}:${p(date.getMinutes())}`;
 }
-// Pass number: salted SHA-256 of nickname + completion time. Same name and time always give the same number.
+// Completion order ("learner No. N") comes from the backend, which keeps one counter for everyone.
+// POST {anonymous_id, course_version, completed_at} → {ok:true, ordinal:N}; the same anonymous_id always gets the same N.
+// The anonymous id is the one the feedback survey already uses. Without a backend the card simply shows no order.
+const COMPLETION_ORDER_ENDPOINT=window.SPQ_COMPLETION_ENDPOINT||'/api/course-completion';
+const COMPLETION_COURSE_VERSION='intro-v1';
+const COMPLETION_ORDER_STORE='spq.completion.ordinal.'+COMPLETION_COURSE_VERSION;
+function completionAnonymousId(){
+ const key='spq.feedback.anonymous',pattern=/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+ try{const saved=localStorage.getItem(key);if(pattern.test(saved||''))return saved}catch(e){}
+ const b=crypto.getRandomValues(new Uint8Array(16));b[6]=(b[6]&15)|64;b[8]=(b[8]&63)|128;
+ const h=[...b].map(n=>n.toString(16).padStart(2,'0')).join(''),id=`${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`;
+ try{localStorage.setItem(key,id)}catch(e){}
+ return id;
+}
+function completionCachedOrdinal(){
+ try{const n=Number(localStorage.getItem(COMPLETION_ORDER_STORE));return Number.isInteger(n)&&n>0?n:0}catch(e){return 0}
+}
+async function completionFetchOrdinal(time,{timeoutMs=4000}={}){
+ const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),timeoutMs);
+ try{
+  const response=await fetch(COMPLETION_ORDER_ENDPOINT,{method:'POST',headers:{'Content-Type':'application/json'},signal:controller.signal,
+   body:JSON.stringify({anonymous_id:completionAnonymousId(),course_version:COMPLETION_COURSE_VERSION,completed_at:time.toISOString()})});
+  const result=await response.json();
+  const n=Number(result?.ordinal);
+  if(!response.ok||result.ok!==true||!Number.isInteger(n)||n<1)return 0;
+  try{localStorage.setItem(COMPLETION_ORDER_STORE,String(n))}catch(e){}
+  return n;
+ }catch(e){return 0}
+ finally{clearTimeout(timer)}
+}
+// Pass number: salted SHA-256 of nickname + completion time (+ order when known). Same inputs always give the same number.
+// With an order: SQ-00128-HPKJ (order, then a 4-character check). Without: SQ-886K-HPKJ.
 const COMPLETION_SALT='SpaceQat/quantum-journey/2026';
 const COMPLETION_ALPHABET='0123456789ABCDEFGHJKMNPQRSTVWXYZ'; // Crockford base32: no I, L, O, U
-async function completionPassNumber(name,date){
- const input=`${COMPLETION_SALT}|${name.normalize('NFC')}|${date.toISOString()}`;
+async function completionPassNumber(name,date,ordinal=0){
+ const input=`${COMPLETION_SALT}|${name.normalize('NFC')}|${date.toISOString()}${ordinal?'|'+ordinal:''}`;
  let bytes;
  try{bytes=new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(input)))}
  catch(e){// no Web Crypto (insecure context): two FNV-1a passes as a fallback
   bytes=new Uint8Array(8);[2166136261,3735928559].forEach((seed,k)=>{let h=seed;for(let i=0;i<input.length;i++)h=Math.imul(h^input.charCodeAt(i),16777619);for(let j=0;j<4;j++)bytes[k*4+j]=(h>>>(j*8))&255})}
  let bits=0,value=0,out='';
  for(const byte of bytes){value=((value<<8)|byte)&0xffff;bits+=8;while(bits>=5&&out.length<8){out+=COMPLETION_ALPHABET[(value>>>(bits-5))&31];bits-=5}if(out.length>=8)break}
- return `SQ-${out.slice(0,4)}-${out.slice(4,8)}`;
+ return ordinal?`SQ-${String(ordinal).padStart(5,'0')}-${out.slice(0,4)}`:`SQ-${out.slice(0,4)}-${out.slice(4,8)}`;
 }
 // Turn the cat-in-box mark into a sticker: holes filled white, thick white outline, so it reads on any background.
 function completionSticker(mark,width,outline){
@@ -3730,7 +3799,7 @@ function drawCompletionCard(canvas,art,info){
   c.fillText(value,x,y);return c.measureText(value).width;
  };
  const round=(x,y,w,h,r,fill,stroke,lw=3)=>{c.beginPath();c.roundRect(x,y,w,h,r);if(fill){c.fillStyle=fill;c.fill()}if(stroke){c.strokeStyle=stroke;c.lineWidth=lw;c.stroke()}};
- const FOOT=1170,en=LANG==='en',chapters=Object.keys(LEVELS).length,lessons=allIds().length,M=72,R=W-72;
+ const FOOT=1170,en=LANG==='en',M=72,R=W-72;
  c.save();c.clearRect(0,0,W,H);
 
  // Field: brand cyan with a faint dot lattice.
@@ -3768,10 +3837,21 @@ function drawCompletionCard(canvas,art,info){
  // ② Who: name, what they finished, then the pass number and completion time as a ticket stub.
  let y=640;
  if(name){text(name,M,y,60,800,ink,'left',936);y+=52}
- const line=name
-  ?L('完成了量立方「量子计算入门」课程','completed Intro to Quantum Computing by SpaceQat')
-  :L('我完成了量立方「量子计算入门」课程','I completed Intro to Quantum Computing by SpaceQat');
- text(line,M,y,30,500,ink,'left',936);
+ const ord=info.ordinal;
+ if(ord){
+  // "第 N 位" inside the sentence, the number set larger in the deep accent.
+  const parts=name
+   ?L(['成为第 ',String(ord),' 位完成「量子计算入门」的量子冒险家'],['is quantum adventurer No. ',String(ord),' to complete Intro to Quantum Computing'])
+   :L(['我是第 ',String(ord),' 位完成「量子计算入门」的量子冒险家'],['I am quantum adventurer No. ',String(ord),' to complete Intro to Quantum Computing']);
+  setFont(30,500);const w0=c.measureText(parts[0]).width,w2=c.measureText(parts[2]).width;setFont(44,900);const w1=c.measureText(parts[1]).width;
+  const k=Math.min(1,936/(w0+w1+w2));let px=M;
+  px+=text(parts[0],px,y,30*k,500,ink,'left',2000);px+=text(parts[1],px,y+2,44*k,900,deep,'left',2000);text(parts[2],px,y,30*k,500,ink,'left',2000);
+ }else{
+  const line=name
+   ?L('完成了量立方「量子计算入门」课程','completed Intro to Quantum Computing by SpaceQat')
+   :L('我完成了量立方「量子计算入门」课程','I completed Intro to Quantum Computing by SpaceQat');
+  text(line,M,y,30,500,ink,'left',936);
+ }
  y+=34;
  const meta=[[L('通关号','PASS NO.'),passNo],[L('通关时间','COMPLETED'),completionTimeLabel(time)]];
  let mx=M;
@@ -3781,13 +3861,18 @@ function drawCompletionCard(canvas,art,info){
   mx+=lw+12+vw+40;
  });
 
- // ③ Stats, stacked on the left; the cat sticker on the right, standing on the footer.
- const stats=[[String(chapters),L('章','chapters')],[String(lessons),L('节','lessons')],['1',L('个亲手写的量子程序','quantum program I wrote')]];
- let sy=name?900:870;const step=name?104:112;
- stats.forEach(([n,unit])=>{
-  const w=text(n,M,sy,96,900,ink,'left',260);
-  text(unit,M+w+14,sy,28,600,ink,'left',300);
-  sy+=step;
+ // ③ What the course covered, as sticker-style chips on the left; the cat sticker on the right, standing on the footer.
+ const words=L(['量子比特','叠加','测量','相位','纠缠','隐形传态','硬件路线','编译','噪声','纠错','干涉','Grover','Shor','FatQat'],
+  ['Qubits','Superposition','Measurement','Phase','Entanglement','Teleportation','Hardware','Compilation','Noise','Error correction','Interference','Grover','Shor','FatQat']);
+ const solid=new Set([4,13]),chipTop=(name?826:796)+16,chipBottom=FOOT-24,maxX=500;
+ // Largest size at which every chip fits the column.
+ const layout=fs=>{const h=Math.round(fs*1.9),gap=Math.round(fs*.45),padX=Math.round(fs*.75),out=[];let cx=M,cy=chipTop;setFont(fs,700);
+  for(const wd of words){const w=c.measureText(wd).width+padX*2;if(cx+w>maxX){cx=M;cy+=h+gap}out.push({wd,x:cx,y:cy,w,h,padX});cx+=w+gap}
+  return {out,fits:cy+h<=chipBottom}};
+ let fs=26,chips=layout(fs);while(!chips.fits&&fs>16)chips=layout(--fs);
+ chips.out.forEach(({wd,x,y,w,h,padX},i)=>{
+  round(x,y,w,h,h/2,solid.has(i)?ink:paper,ink,3);
+  text(wd,x+padX,y+h*.68,fs,700,solid.has(i)?cyan:ink,'left',w);
  });
  const st=art.sticker,sx=W-st.width-30,sy2=FOOT-st.height+4;
  c.save();c.shadowColor='#0b3b3f33';c.shadowBlur=24;c.shadowOffsetY=8;c.drawImage(st.canvas,sx-st.pad,sy2-st.pad);c.restore();
@@ -3803,34 +3888,37 @@ function drawCompletionCard(canvas,art,info){
  text(L('微信可长按识别','the course'),qx-24,FOOT+116,20,500,'#525252','right',260);
  c.restore();
 }
-function showCourseCompletion(){
- if(!courseIsComplete()){home();return}
+function showCourseCompletion(previewOnly){
+ previewOnly=previewOnly===true;
+ if(!previewOnly&&!courseIsComplete()){home();return}
  window.CourseDirectory?.dispose();disposeJourney();rememberStep();S.lesson=null;S.intro=false;
- app.innerHTML=progressHeader(L('学习旅程已完成','Journey complete'),100)+`<main id="main-content" class="completion-page shell">
+ app.innerHTML=progressHeader('',100)+`<main id="main-content" class="completion-page shell"${previewOnly?' data-preview="1"':''}>
   <header class="completion-hero">
    <span class="completion-mark" aria-hidden="true">${courseAchievementBadge(true)}</span>
    <h1 id="completion-title" tabindex="-1">${L('你完成了量子之旅','You finished the quantum journey')}</h1>
-   <p class="completion-count">${L(`全部 ${Object.keys(LEVELS).length} 章、${allIds().length} 节已完成。从“算不完”的问题出发，你一路走过了量子比特、纠缠、硬件、纠错和量子算法，并写出了自己的第一个量子程序。`,`All ${Object.keys(LEVELS).length} chapters and ${allIds().length} lessons are done. Starting from problems that are “impossible to finish”, you worked through qubits, entanglement, hardware, error correction and quantum algorithms, and wrote your first quantum program.`)}</p>
+   <p class="completion-count">${L(`从经典计算机“算不完”的问题出发，你认识了量子比特与纠缠，看到量子线路怎样在真实硬件上运行、噪声又怎样被纠正，理解了干涉如何让量子算法发挥作用，最后亲手写出了第一个量子程序。`,`Starting from problems classical computers can’t finish, you met qubits and entanglement, saw how circuits run on real hardware and how noise gets corrected, learned how interference makes quantum algorithms work, and wrote your first quantum program yourself.`)}</p>
   </header>
   <div class="completion-layout">
+   <div class="completion-card-col">
    <figure class="completion-preview"><img id="completion-card" width="1080" height="1350" alt="${L('量子学习旅程纪念卡','Quantum journey keepsake card')}" hidden><span class="completion-preview-placeholder" aria-hidden="true"></span></figure>
+    <section class="completion-editor" aria-labelledby="completion-editor-title">
+     <h2 id="completion-editor-title">${L('保存纪念卡','Save your keepsake card')}</h2>
+     <div class="completion-save-row"><input id="completion-nickname" type="text" maxlength="40" aria-label="${L('昵称','Name')}" placeholder="${L('昵称（选填）','Name (optional)')}" autocomplete="off"><button id="completion-save" class="primary" disabled>${L('保存图片','Save image')}</button></div>
+     <p id="completion-status" role="status" aria-live="polite">${L('正在准备纪念卡…','Preparing your card…')}</p>
+     <button id="completion-retry" class="text-button" hidden>${L('重新生成纪念卡','Generate the card again')}</button>
+    </section>
+   </div>
    <div class="completion-side">
     <section class="completion-recap" aria-labelledby="completion-recap-title">
      <h2 id="completion-recap-title">${L('旅程回顾','Your journey')}</h2>
      <ol>${Object.entries(LEVELS).map(([chapter,level],i)=>`<li><button type="button" class="completion-recap-row" data-review-chapter="${chapter}"><span class="completion-recap-no">${i+1}</span><span class="completion-recap-text"><strong>${level.name}</strong><span>${COMPLETION_RECAP[chapter]||''}</span></span><span class="sr-only">${L('，回顾本章',', review this chapter')}</span></button></li>`).join('')}</ol>
-    </section>
-    <section class="completion-editor" aria-labelledby="completion-editor-title">
-     <h2 id="completion-editor-title">${L('保存纪念卡','Save your keepsake card')}</h2>
-     <label for="completion-nickname">${L('昵称（选填）','Name (optional)')}</label>
-     <div class="completion-save-row"><input id="completion-nickname" type="text" maxlength="40" placeholder="${L('写上你的名字','Your name')}" autocomplete="off"><button id="completion-save" class="primary" disabled>${L('保存图片','Save image')}</button></div>
-     <p id="completion-status" role="status" aria-live="polite">${L('正在准备纪念卡…','Preparing your card…')}</p>
-     <button id="completion-retry" class="text-button" hidden>${L('重新生成纪念卡','Generate the card again')}</button>
     </section>
    </div>
   </div>
   <section class="completion-next" aria-labelledby="completion-next-title">
    <h2 id="completion-next-title">${L('接下来','What’s next')}</h2>
    <div class="completion-next-grid">
+    <button type="button" class="completion-next-item" id="completion-feedback"><strong>${L('填写结课问卷','Course feedback')}</strong><span>${L('跳过了问卷？可以在这里补填','Skipped the survey? You can fill it in here')}</span></button>
     <a class="completion-next-item" href="https://fatqat.readthedocs.io/en/latest/guide/quickstart/" target="_blank" rel="noopener noreferrer"><strong>${L('用 FatQat 继续实践','Keep practicing with FatQat')}</strong><span>${L('在自己的电脑上运行第七章的量子程序','Run the chapter 7 program on your own computer')}</span></a>
     <button type="button" class="completion-next-item" id="completion-back"><strong>${L('回到课程地图','Back to the course map')}</strong><span>${L('任何一节都可以随时回来复习','Revisit any lesson at any time')}</span></button>
     <button type="button" class="completion-next-item" data-review-chapter="C1"><strong>${L('从第一节重新开始','Start again from lesson one')}</strong><span>${L('带着新的理解再走一遍','Walk through it again with fresh eyes')}</span></button>
@@ -3840,15 +3928,17 @@ function showCourseCompletion(){
  const page=app.querySelector('.completion-page'),input=page.querySelector('#completion-nickname'),anonymous={checked:false,addEventListener(){}};
  const preview=page.querySelector('#completion-card'),saveButton=page.querySelector('#completion-save'),status=page.querySelector('#completion-status'),retry=page.querySelector('#completion-retry');
  const canvas=document.createElement('canvas');canvas.width=COMPLETION_CARD.W;canvas.height=COMPLETION_CARD.H;
- let art,time=courseSyncCompletionTime()||new Date(),drawn=0;
+ let art,time=courseSyncCompletionTime()||new Date(),drawn=0,ordinal=completionCachedOrdinal();
  input.value=completionDraft.nickname;anonymous.checked=completionDraft.anonymous;input.disabled=anonymous.checked;
  const update=async()=>{
   if(!art||!page.isConnected)return;const ticket=++drawn;
   const name=anonymous.checked?'':Array.from(input.value.trim()).slice(0,20).join('');
-  const passNo=await completionPassNumber(name,time);if(ticket!==drawn||!page.isConnected)return;
-  drawCompletionCard(canvas,art,{name,passNo,time});
+  const passNo=await completionPassNumber(name,time,ordinal);if(ticket!==drawn||!page.isConnected)return;
+  drawCompletionCard(canvas,art,{name,passNo,time,ordinal});
   preview.src=canvas.toDataURL('image/png');preview.hidden=false;
-  preview.alt=L(`${name?name+'：':''}测量结果 |通关⟩，测得概率 100%。通关号 ${passNo}，通关时间 ${completionTimeLabel(time)}。完成量立方「量子计算入门」全部 ${Object.keys(LEVELS).length} 章 ${allIds().length} 节。扫码打开课程：${COMPLETION_COURSE_URL}`,`${name?name+': ':''}Measurement result |done⟩, probability 100%. Pass no. ${passNo}, completed ${completionTimeLabel(time)}. Finished all ${Object.keys(LEVELS).length} chapters and ${allIds().length} lessons of SpaceQat's Intro to Quantum Computing. Scan to open the course: ${COMPLETION_COURSE_URL}`);
+  const who=name?name+L('：',': '):'';
+  preview.alt=L(`${who}测量结果 |通关⟩，测得概率 100%。${ordinal?`第 ${ordinal} 位完成`:'完成'}量立方「量子计算入门」课程。通关号 ${passNo}，通关时间 ${completionTimeLabel(time)}。扫码打开课程：${COMPLETION_COURSE_URL}`,
+   `${who}Measurement result |done⟩, probability 100%. ${ordinal?`Quantum adventurer No. ${ordinal} to complete`:'Completed'} Intro to Quantum Computing by SpaceQat. Pass no. ${passNo}, completed ${completionTimeLabel(time)}. Scan to open the course: ${COMPLETION_COURSE_URL}`);
   saveButton.disabled=false;status.textContent='';
  };
  const edit=()=>{
@@ -3856,6 +3946,7 @@ function showCourseCompletion(){
   completionDraft.nickname=input.value;completionDraft.anonymous=anonymous.checked;input.disabled=anonymous.checked;update();
  };
  input.addEventListener('input',event=>{if(!event.isComposing)edit()});input.addEventListener('compositionend',edit);anonymous.addEventListener('change',edit);
+ page.querySelector('#completion-feedback').onclick=()=>window.CourseFeedback?.open({force:true});
  page.querySelector('#completion-back').onclick=()=>{home();window.scrollTo(0,0);document.getElementById('view-completion')?.focus({preventScroll:true})};
  page.querySelectorAll('[data-review-chapter]').forEach(button=>button.onclick=()=>open(LEVELS[button.dataset.reviewChapter].list[0]));
  saveButton.onclick=()=>{
@@ -3873,8 +3964,217 @@ function showCourseCompletion(){
   }catch(error){if(page.isConnected){status.textContent=L('纪念卡未能生成，请重试。','The card could not be created. Please try again.');retry.hidden=false}}
  };
  retry.onclick=prepare;prepare();
+ // Ask for the completion order in the background; redraw once it arrives. A cached order is used straight away.
+ if(!ordinal)completionFetchOrdinal(time).then(n=>{if(n&&page.isConnected){ordinal=n;update()}});
  window.scrollTo(0,0);page.querySelector('h1').focus({preventScroll:true});
 }
+;
+/* js/analytics.js */
+/* Anonymous learning analytics.
+   1. Study time: while a lesson is open, the tab is visible and the learner was active in the last 2 minutes,
+      time is added to that lesson. Totals stay in this browser and are sent with the completion survey.
+   2. Lesson completion: the first time a lesson is finished, one anonymous event is sent, so drop-off points
+      can be seen for learners who never reach the survey. Failures are ignored; learning is never blocked.
+   Set window.SPQ_PROGRESS_ENDPOINT before this script to point elsewhere (default: same-origin /api/course-progress). */
+(() => {
+ 'use strict';
+ const COURSE_VERSION='intro-v1';
+ const endpoint=window.SPQ_PROGRESS_ENDPOINT||'/api/course-progress';
+ const TIME_KEY='spq.studyTime',SENT_KEY='spq.progressSent',ID_KEY='spq.feedback.anonymous';
+ const TICK=5,IDLE=120;
+ const uuidPattern=/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+ const read=(key,fallback)=>{try{const v=JSON.parse(localStorage.getItem(key)||'null');return v&&typeof v==='object'?v:fallback}catch{return fallback}};
+ const write=(key,value)=>{try{localStorage.setItem(key,JSON.stringify(value))}catch{}};
+
+ // Same anonymous ID as the survey, so progress events and feedback from one browser can be linked.
+ function anonymousId(){
+  let id='';
+  try{id=localStorage.getItem(ID_KEY)||''}catch{}
+  if(!uuidPattern.test(id)){
+   const b=crypto.getRandomValues(new Uint8Array(16));b[6]=(b[6]&15)|64;b[8]=(b[8]&63)|128;
+   const h=[...b].map(n=>n.toString(16).padStart(2,'0')).join('');
+   id=`${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`;
+   try{localStorage.setItem(ID_KEY,id)}catch{}
+  }
+  return id;
+ }
+
+ // ---- Study time ----
+ let lastActive=Date.now();
+ for(const type of ['pointerdown','keydown','wheel','touchstart','scroll'])addEventListener(type,()=>{lastActive=Date.now()},{passive:true,capture:true});
+ setInterval(()=>{
+  if(typeof S==='undefined'||!S.lesson||S.intro||document.hidden)return;
+  if(Date.now()-lastActive>IDLE*1000)return;
+  const times=read(TIME_KEY,{}),id=S.lesson.id;
+  times[id]=(Number(times[id])||0)+TICK;
+  write(TIME_KEY,times);
+ },TICK*1000);
+
+ function studyTime(){
+  const times=read(TIME_KEY,{}),byChapter={};let total=0;
+  for(const [id,seconds] of Object.entries(times)){
+   const s=Math.max(0,Math.round(Number(seconds)||0)),chapter=id.split('-')[0];
+   byChapter[chapter]=(byChapter[chapter]||0)+s;total+=s;
+  }
+  return {total_seconds:total,by_chapter:byChapter};
+ }
+
+ // ---- Lesson completion events ----
+ function lessonDone(lessonId){
+  const sent=read(SENT_KEY,{});
+  if(sent[lessonId])return;
+  sent[lessonId]=1;write(SENT_KEY,sent);
+  const times=read(TIME_KEY,{});
+  const payload={
+   anonymous_id:anonymousId(),course_version:COURSE_VERSION,language:typeof LANG==='string'?LANG:'zh',
+   lesson_id:lessonId,completed_lessons:typeof S!=='undefined'?Object.keys(S.done||{}).length:0,
+   lesson_seconds:Math.round(Number(times[lessonId])||0),
+  };
+  try{
+   const body=JSON.stringify(payload);
+   if(navigator.sendBeacon&&navigator.sendBeacon(endpoint,new Blob([body],{type:'application/json'})))return;
+   fetch(endpoint,{method:'POST',headers:{'Content-Type':'application/json'},body,keepalive:true}).catch(()=>{});
+  }catch{}
+ }
+
+ window.CourseAnalytics={anonymousId,studyTime,lessonDone};
+})();
+;
+/* js/feedback.js */
+/* Completion questionnaire. Shown once, the first time every lesson is done; skip, failure or timeout all continue to the keepsake card.
+   Secrets and the actual submission time live on the backend. The endpoint is same-origin by default (Nginx proxies it);
+   set window.SPQ_FEEDBACK_ENDPOINT before this script to point elsewhere. */
+(() => {
+ 'use strict';
+ const config={courseVersion:'intro-v1',surveyVersion:'v2',endpoint:window.SPQ_FEEDBACK_ENDPOINT||'/api/course-feedback'};
+ const seenKey=`spq.feedback.${config.courseVersion}.${config.surveyVersion}`;
+ const uuidPattern=/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+ let anonymous='',pending=null,draft=null;
+ const text=(zh,en)=>typeof L==='function'?L(zh,en):zh;
+
+ function uuid(){
+  // getRandomValues also works on the NAS's plain HTTP test address.
+  const bytes=crypto.getRandomValues(new Uint8Array(16));
+  bytes[6]=(bytes[6]&15)|64;bytes[8]=(bytes[8]&63)|128;
+  const h=[...bytes].map(n=>n.toString(16).padStart(2,'0')).join('');
+  return `${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`;
+ }
+ function anonymousId(){
+  if(anonymous)return anonymous;
+  try{const saved=localStorage.getItem('spq.feedback.anonymous');if(uuidPattern.test(saved||''))anonymous=saved}catch{}
+  if(!anonymous){anonymous=uuid();try{localStorage.setItem('spq.feedback.anonymous',anonymous)}catch{}}
+  return anonymous;
+ }
+ function markSeen(value){try{localStorage.setItem(seenKey,value)}catch{}}
+ function alreadySeen(){try{return ['submitted','skipped'].includes(localStorage.getItem(seenKey))}catch{return false}}
+
+ async function send(payload,{timeoutMs=10000}={}){
+  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),timeoutMs);
+  try{
+   const response=await fetch(config.endpoint,{
+    method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),signal:controller.signal,
+   });
+   const result=await response.json();
+   if(!response.ok||result.ok!==true||result.submission_id!==payload.submission_id)return {status:'unconfirmed',code:result.code||'INVALID_RESPONSE'};
+   return {status:'submitted',mode:result.mode,duplicate:result.duplicate===true,submissionId:result.submission_id};
+  }catch{return {status:'unconfirmed',code:controller.signal.aborted?'TIMEOUT':'NETWORK_ERROR'}}
+  finally{clearTimeout(timer)}
+ }
+ async function deliver(payload,continueJourney,options){
+  const result=await send(payload,options);
+  continueJourney(result);
+  return result;
+ }
+ function completion(result){
+  showCourseCompletion();
+  if(!['submitted','unconfirmed'].includes(result.status))return;
+  const hero=document.querySelector('.completion-hero');
+  if(!hero)return;
+  const note=document.createElement('p');note.className='feedback-notice';note.setAttribute('role','status');
+  note.textContent=result.status==='submitted'
+   ?text('已提交','Submitted')
+   :text('反馈暂未确认保存，不影响查看和保存纪念卡。','Your feedback could not be confirmed. You can still view and save your keepsake card.');
+  hero.append(note);
+ }
+ function openForm({preview=false,force=false,returnTo=null}={}){
+  if(!preview&&!force&&alreadySeen()){completion({status:'previous'});return}
+  window.CourseDirectory?.dispose();disposeJourney();rememberStep();S.lesson=null;S.intro=false;
+  const complete=courseIsComplete(),count=allIds().filter(id=>S.done[id]).length;
+  const back=()=>{if(returnTo&&LESSONS[returnTo.id]){open(returnTo.id,returnTo.step);return}if(complete)completion({status:'skipped'});else{home();window.scrollTo(0,0)}};
+  const roles=[['high_school','高中生及以下','High school student or younger'],['undergraduate','本科生','Undergraduate'],['graduate','研究生','Graduate student'],['researcher','科研人员','Researcher'],['professional','量子计算从业者','Quantum computing professional'],['other','其他','Other']];
+  const backgrounds=[['none','没接触过','New to it'],['some','了解一些概念','Know some concepts'],['experienced','学过相关课程或做过相关工作','Took a course or worked on it']];
+  const majors=[['physics','物理','Physics'],['cs','计算机','Computer science'],['math','数学','Mathematics'],['other_stem','其他理工科','Other science or engineering'],['non_stem','非理工科','Non-science field'],['none','暂无专业','No major yet']];
+  const difficulties=[['too_easy','太简单','Too easy'],['easy','略简单','A bit easy'],['right','合适','About right'],['hard','略难','A bit hard'],['too_hard','太难','Too hard']];
+  const options=list=>list.map(([value,zh,en])=>`<option value="${value}">${text(zh,en)}</option>`).join('');
+  // Chapter questions: pick up to two chapters, or "about the same" on its own.
+  const chapterPicks=name=>`<div>${Object.entries(LEVELS).map(([id,level],i)=>`<label><input type="checkbox" name="${name}" value="${id}"><span>${i+1}. ${level.name}</span></label>`).join('')}<label><input type="checkbox" name="${name}" value="same"><span>${text('都差不多','About the same')}</span></label></div>`;
+  const chips=(name,list,required)=>`<div>${list.map(([value,zh,en])=>`<label><input type="radio" name="${name}" value="${value}"${required?' required':''}><span>${text(zh,en)}</span></label>`).join('')}</div>`;
+  app.innerHTML=progressHeader('',courseProgressPercent())+`<main id="main-content" class="feedback-page shell">
+   <header class="feedback-heading"><h1 tabindex="-1">${text('分享你的学习体验','Tell us about your learning experience')}</h1><p>${returnTo?text('可在这里分享学习感受，填写后返回当前小节。','Share your experience, then return to this lesson.'):text('问卷为选填；提交或跳过后即可查看纪念卡。','This survey is optional. Submit or skip to view your keepsake card.')}</p></header>
+   <form id="course-feedback-form" class="feedback-form">
+    <div class="feedback-grid"><label>${text('身份','Role')}<select name="role" required><option value="">${text('请选择','Choose one')}</option>${options(roles)}</select></label>
+    <label>${text('专业背景','Field of study')}<select name="major" required><option value="">${text('请选择','Choose one')}</option>${options(majors)}</select></label></div>
+    <fieldset class="feedback-rating feedback-choice"><legend>${text('学习本课程前，你对量子计算了解多少？','Before this course, how familiar were you with quantum computing?')}</legend>${chips('background',backgrounds,true)}</fieldset>
+    <fieldset class="feedback-rating"><legend>${text('总体评分','Overall rating')}<span class="feedback-hint">${text('（1 = 不满意，5 = 非常满意）',' (1 = dissatisfied, 5 = very satisfied)')}</span></legend><div>${[1,2,3,4,5].map(n=>`<label><input type="radio" name="rating" value="${n}" required><span>${n}</span></label>`).join('')}</div></fieldset>
+    <fieldset class="feedback-rating feedback-choice"><legend>${text('课程难度','Difficulty')}</legend>${chips('difficulty',difficulties,true)}</fieldset>
+    <fieldset class="feedback-rating feedback-choice feedback-chapter-pick" data-max="2"><legend>${text('最有帮助的章节','Most helpful chapters')}<span class="feedback-hint">${text('（选填，最多 2 个）',' (optional, up to 2)')}</span></legend>${chapterPicks('helpful_chapters')}</fieldset>
+    <fieldset class="feedback-rating feedback-choice feedback-chapter-pick" data-max="2"><legend>${text('学起来最吃力的章节','Hardest chapters for you')}<span class="feedback-hint">${text('（选填，最多 2 个）',' (optional, up to 2)')}</span></legend>${chapterPicks('hardest_chapters')}</fieldset>
+    <label>${text('你对后续课程的期待','What you hope for in future courses')}<span class="feedback-hint">${text('（选填，最多 500 字）',' (optional, up to 500 characters)')}</span><textarea name="suggestions" maxlength="500" rows="4" aria-describedby="feedback-character-count" placeholder="${text('还想学什么内容？希望以什么形式学？有任何建议都可以写在这里','What else would you like to learn? In what format? Any suggestions are welcome here.')}"></textarea></label><p id="feedback-character-count" class="feedback-counter">0 / 500</p>
+    <label class="feedback-consent"><input type="checkbox" name="notify_opt_in"><span>${text('愿意接收后续课程通知','I would like to receive updates about future courses')}</span></label>
+    <div id="feedback-contact-group" hidden><input name="contact" maxlength="200" autocomplete="email" aria-label="${text('联系方式','Contact details')}" placeholder="${text('联系方式（邮箱优先）','Contact details (email preferred)')}"><p class="feedback-privacy">${text('仅用于课程通知，可随时退订。','Used only for course updates. You can unsubscribe at any time.')}</p></div>
+    <div class="feedback-trap" aria-hidden="true"><label>Website<input name="website" tabindex="-1" autocomplete="off"></label></div>
+    <p id="feedback-result" class="feedback-result" role="status" aria-live="polite"></p>
+    <div class="feedback-actions"><button type="submit" class="primary" id="feedback-submit">${preview?text('提交反馈','Submit feedback'):text('提交并查看纪念卡','Submit and view keepsake card')}</button><button type="button" class="ghost" id="feedback-skip">${complete?text('跳过，查看纪念卡','Skip and view keepsake card'):text('跳过，继续课程','Skip and continue course')}</button></div>
+   </form></main>`+siteFooter();
+  const page=app.querySelector('.feedback-page'),form=page.querySelector('form'),result=page.querySelector('#feedback-result'),submit=page.querySelector('#feedback-submit'),skip=page.querySelector('#feedback-skip');
+  const fields=form.elements;
+  if(returnTo)skip.textContent=text('返回本节','Back to this lesson');
+  if(preview)page.dataset.preview='1';
+  if(returnTo)page.dataset.returnTo=JSON.stringify(returnTo);
+  function syncContact(){const enabled=fields.notify_opt_in.checked;page.querySelector('#feedback-contact-group').hidden=!enabled;fields.contact.required=enabled;if(!enabled)fields.contact.value=''}
+  function answers(){return {role:fields.role.value,background:fields.background.value,major:fields.major.value,rating:Number(fields.rating.value),difficulty:fields.difficulty.value,helpful_chapters:picked('helpful_chapters'),hardest_chapters:picked('hardest_chapters'),suggestions:fields.suggestions.value.trim(),notify_opt_in:fields.notify_opt_in.checked,contact:fields.notify_opt_in.checked?fields.contact.value.trim():''}}
+  function remember(){draft=answers();page.querySelector('#feedback-character-count').textContent=`${[...fields.suggestions.value].length} / 500`}
+  function picked(name){return [...form.querySelectorAll(`input[name="${name}"]:checked`)].map(box=>box.value)}
+  // At most two chapters; "about the same" clears the chapters and vice versa.
+  function syncPicks(group,changed){
+   const boxes=[...group.querySelectorAll('input')],same=boxes.find(box=>box.value==='same'),chapters=boxes.filter(box=>box!==same);
+   if(changed===same&&same.checked)chapters.forEach(box=>{box.checked=false});
+   else if(changed&&changed!==same&&changed.checked)same.checked=false;
+   const full=chapters.filter(box=>box.checked).length>=Number(group.dataset.max||2);
+   chapters.forEach(box=>{box.disabled=full&&!box.checked;box.closest('label').classList.toggle('is-disabled',box.disabled)});
+  }
+  if(draft){for(const [name,value] of Object.entries(draft)){
+   if(Array.isArray(value))form.querySelectorAll(`input[name="${name}"]`).forEach(box=>{box.checked=value.includes(box.value)});
+   else if(name==='notify_opt_in')fields[name].checked=value;else if(fields[name])fields[name].value=String(value);
+  }}
+  page.querySelectorAll('.feedback-chapter-pick').forEach(group=>{syncPicks(group);group.addEventListener('change',event=>syncPicks(group,event.target))});
+  syncContact();remember();
+  fields.notify_opt_in.addEventListener('change',()=>{syncContact();remember()});
+  form.addEventListener('input',()=>{remember();result.textContent='';submit.textContent=preview?text('提交反馈','Submit feedback'):text('提交并查看纪念卡','Submit and view keepsake card')});
+  let busy=false;
+  skip.onclick=()=>{if(!preview)markSeen('skipped');back()};
+  form.addEventListener('submit',async event=>{
+   event.preventDefault();if(busy||!form.reportValidity())return;
+   remember();
+   const values={anonymous_id:anonymousId(),course_version:config.courseVersion,survey_version:config.surveyVersion,language:LANG,completed_lessons:count,study_time:window.CourseAnalytics?.studyTime()||null,answers:answers(),website:fields.website.value};
+   const signature=JSON.stringify(values);
+   if(!pending||pending.signature!==signature)pending={signature,payload:{submission_id:uuid(),...values}};
+   busy=true;submit.disabled=true;submit.textContent=text('正在提交…','Submitting…');
+   result.textContent=text('正在保存反馈，你也可以随时继续。','Saving your feedback. You can continue at any time.');
+   await deliver(pending.payload,response=>{
+    if(!preview){if(response.status==='submitted')markSeen('submitted');if(page.isConnected)completion(response);return}
+    if(!page.isConnected)return;
+    if(response.status==='submitted'){
+     result.textContent=text('已提交','Submitted');
+     skip.textContent=returnTo?text('返回本节','Back to this lesson'):complete?text('查看纪念卡','View keepsake card'):text('返回课程','Back to course');
+    }else result.textContent=text('反馈暂未确认保存。可重试，或直接继续课程。','Your feedback could not be confirmed. Retry or continue the course.');
+   },{timeoutMs:10000});
+   busy=false;if(page.isConnected){submit.disabled=false;submit.textContent=preview?text('再次提交','Submit again'):text('提交并查看纪念卡','Submit and view keepsake card')}
+  });
+  window.scrollTo(0,0);page.querySelector('h1').focus({preventScroll:true});
+ }
+ window.CourseFeedback={open:openForm,send,deliver};
+})();
 ;
 /* js/start.js */
 /* Required curriculum: chapters and lesson order. Lesson IDs are C<chapter>-<position>. */
@@ -3889,7 +4189,43 @@ const LEVELS={
 };
 // In the published build the stylesheet loads without blocking, so the splash shows at once;
 // the course itself starts only when the stylesheet is in, so nothing renders unstyled.
-function courseBoot(){load();home();showWelcome();}
+function courseBoot(){
+ load();
+ // After a language switch, reopen the page the learner was on instead of the course map.
+ let place=null;
+ try{place=JSON.parse(sessionStorage.getItem('spq.place')||'null');sessionStorage.removeItem('spq.place')}catch(e){}
+ const restoreScroll=()=>{if(place?.scroll>0)requestAnimationFrame(()=>requestAnimationFrame(()=>window.scrollTo(0,place.scroll)))};
+ if(place?.home){home();if(place.welcome)showWelcome();restoreScroll();return;}
+ if(place?.view==='completion'&&(courseIsComplete()||place.preview)){
+  showCourseCompletion(!!place.preview);
+  const input=document.getElementById('completion-nickname');
+  if(input&&place.nickname){input.value=place.nickname;input.dispatchEvent(new Event('input',{bubbles:true}))}
+  restoreScroll();return;
+ }
+ if(place?.view==='feedback'&&window.CourseFeedback){
+  window.CourseFeedback.open({preview:place.preview,force:true,returnTo:place.returnTo});
+  const form=document.getElementById('course-feedback-form');
+  if(form&&place.fields){
+   for(const [name,value] of Object.entries(place.fields)){
+    const field=form.elements[name];if(!field)continue;
+    if(Array.isArray(value)){for(const box of form.querySelectorAll(`[name="${name}"]`))box.checked=value.includes(box.value);form.querySelectorAll(`[name="${name}"]`)[0]?.dispatchEvent(new Event('change',{bubbles:true}))}
+    else if(field instanceof RadioNodeList||field.type==='radio'){for(const r of form.querySelectorAll(`[name="${name}"]`))r.checked=r.value===value}
+    else if(field.type==='checkbox'){field.checked=!!value;field.dispatchEvent(new Event('change',{bubbles:true}))}
+    else field.value=value??'';
+   }
+   form.dispatchEvent(new Event('input',{bubbles:true}));
+  }
+  restoreScroll();return;
+ }
+ if(place&&LESSONS[place.id]){
+  if(place.intro)open(place.id,undefined,true);
+  else if(S.resume[place.id]?.step===place.step)open(place.id);
+  else open(place.id,Math.min(Math.max(0,place.step|0),LESSONS[place.id].pages.length-1));
+  restoreScroll();return;
+ }
+ if(/^\/feedback\/?$/.test(location.pathname)&&window.CourseFeedback){window.CourseFeedback.open({preview:true});return;}
+ home();showWelcome();
+}
 (function bootWhenStyled(run){
  let started=false;const go=()=>{if(!started){started=true;run()}};
  try{

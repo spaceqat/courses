@@ -69,3 +69,5 @@ credited to Graham Carlow for IBM under CC BY-ND 2.0.
 - Download: https://media.springernature.com/full/springer-static/image/art%3A10.1038%2Fs41586-022-05117-x/MediaObjects/41586_2022_5117_Fig1_HTML.png
 - License: CC BY 4.0 (open access, stated on the article page):
   https://creativecommons.org/licenses/by/4.0/
+
+Web versions used by the course: each asset above is also saved as `*-500.webp` (500 px tall, WebP quality 80) for display; the originals stay here as sources.

@@ -15,3 +15,5 @@ during the license audit. The credit and CC BY-ND 2.0 designation above are
 retained from the existing provenance record, not independently reconfirmed
 in that audit. Recheck the original page or retained license evidence before
 publication.
+
+Web version used by the course: `ibm-quantum-hardware-500.webp` (500 px tall, WebP quality 80).
