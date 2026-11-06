@@ -2,7 +2,13 @@
 (() => {
   const button = document.getElementById('persistent-feedback');
   const updateLabel = () => {
-    button.textContent = typeof LANG !== 'undefined' && LANG === 'en' ? 'Submit feedback' : '提交反馈';
+    const label = typeof LANG !== 'undefined' && LANG === 'en' ? 'Feedback' : '提交反馈';
+    if (button.textContent !== label) button.textContent = label;
+    const language = document.querySelector('[data-lang-switch]');
+    if (language && language.previousElementSibling !== button) {
+      language.before(button);
+    }
+    button.hidden = !language;
   };
   button.addEventListener('click', () => {
     const form = document.getElementById('course-feedback-form');
