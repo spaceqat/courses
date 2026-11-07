@@ -3707,7 +3707,7 @@ function completionImage(src){
 // and the SpaceQat cat climbs out of its box. Brand cyan (the cat's eye) full-bleed, black ink, both logos.
 const COMPLETION_CARD={W:1080,H:1350};
 // Where the QR code and the footer send people. assets/course-qr.png encodes this exact URL; regenerate it if this changes.
-const COMPLETION_COURSE_URL='https://space-qat.com/learn/intro';
+const COMPLETION_COURSE_URL='https://space-qat.com/courses/intro/';
 // The moment the last lesson was finished, kept beside the progress record; clearing progress clears it.
 const COURSE_COMPLETED_AT_STORE=COURSE_STORE+'.completedAt';
 function courseSyncCompletionTime(){

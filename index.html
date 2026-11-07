@@ -2,32 +2,18 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color">
-  <meta property="og:type" content="website">
-  <meta property="og:title" content="量立方 SpaceQat | 量子计算入门">
-  <meta name="twitter:card" content="summary">
-  <title>量立方(SpaceQat) | 量子计算入门</title>
-  <style>
-   /* Splash: shown until the course renders over it. Inline so it appears before any stylesheet or script arrives. */
-   html,body{margin:0;background:#f5f5f5}
-   .boot-splash{position:fixed;inset:0;display:grid;place-items:center;background:#f5f5f5}
-   .boot-splash img{width:min(180px,45vw);height:auto;animation:boot-pulse 1.6s ease-in-out infinite}
-   @keyframes boot-pulse{50%{opacity:.55}}
-   @media(prefers-reduced-motion:reduce){.boot-splash img{animation:none}}
-  </style>
-  <link rel="icon" type="image/png" href="assets/spaceqat-site-logo.png?v=20261101-cleanup">
-  <link rel="preload" href="assets/openqi-logo.png?v=20261103" as="image">
-  <link rel="stylesheet" href="assets/course.css?v=ddcff83707" media="print" onload="this.media='all'" data-async>
-  <noscript><link rel="stylesheet" href="assets/course.css?v=ddcff83707"></noscript>
-<link rel="stylesheet" href="feedback-entry.css?v=20261106-nav-group">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>量立方 SpaceQat | 量子计算入门</title>
+  <link rel="canonical" href="https://space-qat.com/courses/intro/">
+  <script>
+    const target = new URL('./intro/', location.href);
+    target.search = location.search;
+    target.hash = location.hash;
+    location.replace(target.href);
+  </script>
+  <noscript><meta http-equiv="refresh" content="0; url=./intro/"></noscript>
 </head>
 <body>
-<a class="skip-link" href="#main-content">跳到主要内容</a>
-<div id="app"><div class="boot-splash" aria-hidden="true"><img src="assets/spaceqat-logo-600.png?v=20261103" alt="" width="600" height="233"></div></div>
-<script defer src="feedback-config.js?v=20261106"></script>
-<script defer src="js/course.js?v=ec9ed36c5d"></script>
-<button type="button" id="persistent-feedback" class="lang-toggle" hidden>提交反馈</button>
-<script defer src="feedback-entry.js?v=20261106-nav-group"></script>
+  <p><a href="./intro/">进入量子计算入门课程 / Open Intro to Quantum Computing</a></p>
 </body>
 </html>
