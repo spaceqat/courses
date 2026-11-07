@@ -4110,7 +4110,7 @@ function showCourseCompletion(previewOnly){
   const chapterPicks=name=>`<div>${Object.entries(LEVELS).map(([id,level],i)=>`<label><input type="checkbox" name="${name}" value="${id}"><span>${i+1}. ${level.name}</span></label>`).join('')}<label><input type="checkbox" name="${name}" value="same"><span>${text('都差不多','About the same')}</span></label></div>`;
   const chips=(name,list,required)=>`<div>${list.map(([value,zh,en])=>`<label><input type="radio" name="${name}" value="${value}"${required?' required':''}><span>${text(zh,en)}</span></label>`).join('')}</div>`;
   app.innerHTML=progressHeader('',courseProgressPercent())+`<main id="main-content" class="feedback-page shell">
-   <header class="feedback-heading"><h1 tabindex="-1">${text('分享你的学习体验','Tell us about your learning experience')}</h1><p>${returnTo?text('可在这里分享学习感受，填写后返回当前小节。','Share your experience, then return to this lesson.'):text('问卷为选填；提交或跳过后即可查看纪念卡。','This survey is optional. Submit or skip to view your keepsake card.')}</p></header>
+   <header class="feedback-heading"><h1 tabindex="-1">${text('分享你的学习体验','Tell us about your learning experience')}</h1>${returnTo?`<p>${text('可在这里分享学习感受，填写后返回当前小节。','Share your experience, then return to this lesson.')}</p>`:''}</header>
    <form id="course-feedback-form" class="feedback-form">
     <div class="feedback-grid"><label>${text('身份','Role')}<select name="role" required><option value="">${text('请选择','Choose one')}</option>${options(roles)}</select></label>
     <label>${text('专业背景','Field of study')}<select name="major" required><option value="">${text('请选择','Choose one')}</option>${options(majors)}</select></label></div>
